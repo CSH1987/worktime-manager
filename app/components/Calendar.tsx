@@ -53,6 +53,7 @@ export default function Calendar({
   onRemoveAttendance,
   onRemoveOvertimeForDay,
 }: CalendarProps) {
+  const { attendance, overtime } = data;
   const [dragStart, setDragStart] = useState<string | null>(null);
   const [dragEnd, setDragEnd] = useState<string | null>(null);
 
@@ -84,31 +85,31 @@ export default function Calendar({
 
   useEffect(() => {
     if (!dragStart) return;
-    window.addEventListener("mouseup", finishDrag);
-    return () => window.removeEventListener("mouseup", finishDrag);
+    window.addEventListener("pointerup", finishDrag);
+    return () => window.removeEventListener("pointerup", finishDrag);
   }, [dragStart, finishDrag]);
 
   const attendanceByDate = useMemo(() => {
-    const map = new Map<string, typeof data.attendance>();
-    for (const r of data.attendance) {
+    const map = new Map<string, typeof attendance>();
+    for (const r of attendance) {
       (map.get(r.date) ?? map.set(r.date, []).get(r.date)!).push(r);
     }
     return map;
-  }, [data.attendance]);
+  }, [attendance]);
 
   const overtimeByDate = useMemo(() => {
-    const map = new Map<string, typeof data.overtime>();
-    for (const r of data.overtime) {
+    const map = new Map<string, typeof overtime>();
+    for (const r of overtime) {
       (map.get(r.date) ?? map.set(r.date, []).get(r.date)!).push(r);
     }
     return map;
-  }, [data.overtime]);
+  }, [overtime]);
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
       {/* 헤더 */}
-      <div className="flex items-start justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
             {year} · <span className="text-indigo-600">{month + 1}월</span>
           </h1>
@@ -116,7 +117,7 @@ export default function Calendar({
             날짜를 드래그하면 여러 날을 한 번에 등록할 수 있어요.
           </p>
         </div>
-        <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1 py-1">
+        <div className="flex shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-white px-1 py-1">
           <button
             onClick={onPrev}
             className="flex h-7 w-7 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100"
@@ -126,7 +127,7 @@ export default function Calendar({
           </button>
           <button
             onClick={onToday}
-            className="px-3 text-sm font-semibold text-slate-700"
+            className="whitespace-nowrap px-3 text-sm font-semibold text-slate-700"
           >
             오늘
           </button>
@@ -192,19 +193,30 @@ export default function Calendar({
           return (
             <div
               key={key}
-              onMouseDown={() => {
+              role={inMonth ? "button" : undefined}
+              tabIndex={inMonth ? 0 : undefined}
+              aria-label={
+                inMonth ? `${month + 1}월 ${d.getDate()}일 일정 등록` : undefined
+              }
+              onPointerDown={() => {
                 if (!inMonth) return;
                 setDragStart(key);
                 setDragEnd(key);
               }}
-              onMouseEnter={() => {
+              onPointerEnter={() => {
                 if (dragStart && inMonth) setDragEnd(key);
               }}
-              className={`relative flex min-h-[120px] flex-col bg-white p-2 ${
+              onKeyDown={(e) => {
+                if (inMonth && (e.key === "Enter" || e.key === " ")) {
+                  e.preventDefault();
+                  onSelectDates([key]);
+                }
+              }}
+              className={`relative flex min-h-[88px] flex-col bg-white p-1.5 sm:min-h-[120px] sm:p-2 ${
                 inMonth ? "cursor-pointer" : "bg-slate-50"
               } ${inSelection ? "ring-2 ring-inset ring-indigo-400" : ""} ${
                 isToday ? "ring-2 ring-inset ring-indigo-500" : ""
-              }`}
+              } focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500`}
             >
               {/* 날짜 번호 + 공휴일 + 배지 */}
               <div className="flex items-start justify-between">
@@ -238,7 +250,7 @@ export default function Calendar({
                           e.stopPropagation();
                           onRemoveAttendance(r.id);
                         }}
-                        onMouseDown={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
                         title="클릭하면 삭제됩니다"
                         className={`flex w-full items-center gap-1 truncate rounded px-1.5 py-0.5 text-left text-[11px] font-medium ${st.bg} ${st.text}`}
                       >
@@ -261,7 +273,7 @@ export default function Calendar({
                     e.stopPropagation();
                     onRemoveOvertimeForDay(key);
                   }}
-                  onMouseDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
                   title="클릭하면 이 날의 잔업이 삭제됩니다"
                   className="mt-auto w-full truncate rounded-md bg-indigo-700 px-2 py-1 text-left text-[11px] font-semibold text-white hover:bg-indigo-800"
                 >

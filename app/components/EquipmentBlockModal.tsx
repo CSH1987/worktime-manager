@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { EquipmentItem } from "../lib/types";
 
 export default function EquipmentBlockModal({
@@ -30,6 +30,15 @@ export default function EquipmentBlockModal({
     onSubmit(name.trim(), reason.trim(), s, e);
   };
 
+  // ESC 로 닫기
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const field =
     "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none";
 
@@ -39,10 +48,15 @@ export default function EquipmentBlockModal({
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="equip-modal-title"
         className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-lg font-bold text-slate-900">사용 불가 등록</h3>
+        <h3 id="equip-modal-title" className="text-lg font-bold text-slate-900">
+          사용 불가 등록
+        </h3>
 
         <div className="mt-4 space-y-4">
           <div>
@@ -50,6 +64,7 @@ export default function EquipmentBlockModal({
               설비
             </label>
             <input
+              autoFocus
               list="equipment-options"
               value={name}
               onChange={(e) => setName(e.target.value)}

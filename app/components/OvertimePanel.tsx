@@ -37,7 +37,7 @@ export default function OvertimePanel({
   const max = Math.max(1, ...ranking.map((r) => r.count));
 
   return (
-    <aside className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <aside className="min-w-0 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex items-start justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-900">잔업 횟수</h2>
@@ -62,8 +62,13 @@ export default function OvertimePanel({
         </div>
       </div>
 
-      <ul className="mt-5 space-y-2.5">
-        {ranking.map((row, i) => {
+      {total === 0 ? (
+        <p className="mt-5 rounded-xl bg-slate-50 py-8 text-center text-sm text-slate-400">
+          데이터가 없습니다.
+        </p>
+      ) : (
+        <ul className="mt-5 space-y-2.5">
+          {ranking.map((row, i) => {
           const isTop = i === 0 && row.count > 0;
           return (
             <li
@@ -102,8 +107,9 @@ export default function OvertimePanel({
               </div>
             </li>
           );
-        })}
-      </ul>
+          })}
+        </ul>
+      )}
 
       <p className="mt-5 flex gap-1.5 rounded-xl bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
         <span>💡</span>

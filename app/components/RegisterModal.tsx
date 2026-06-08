@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ATTENDANCE_TYPES, fromKey } from "../lib/data";
 import type { AttendanceType, Person } from "../lib/types";
 
@@ -41,6 +41,15 @@ export default function RegisterModal({
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
 
+  // ESC 로 닫기
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const submit = () => {
     if (kind === "근태") {
       onAddAttendance(personId, type);
@@ -57,17 +66,23 @@ export default function RegisterModal({
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="register-modal-title"
         className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-lg font-bold text-slate-900">일정 등록</h3>
+        <h3 id="register-modal-title" className="text-lg font-bold text-slate-900">
+          일정 등록
+        </h3>
         <p className="mt-1 text-sm text-slate-500">{formatDates(dates)}</p>
 
         {/* 구분 토글 */}
         <div className="mt-4 flex gap-1 rounded-full bg-slate-100 p-1">
-          {(["근태", "잔업"] as const).map((k) => (
+          {(["근태", "잔업"] as const).map((k, i) => (
             <button
               key={k}
+              autoFocus={i === 0}
               onClick={() => setKind(k)}
               className={`flex-1 rounded-full py-2 text-sm font-semibold transition-colors ${
                 kind === k
