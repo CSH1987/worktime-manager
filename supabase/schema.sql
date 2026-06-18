@@ -1,44 +1,53 @@
 -- ============================================================
---  근태·잔업 관리 — Supabase 스키마 (공유 보드 / 로그인 없음)
---  실행: Supabase 대시보드 → SQL Editor → 아래 전체 붙여넣고 Run
---  안전하게 여러 번 실행 가능 (idempotent).
+--  근태·잔업 통합 관리 — Supabase 스키마 v2 (공유 보드 / 로그인 없음)
+--  원본(sms-ten-pi) 데이터 모델과 동일:
+--    members / absences / overtime_availability / overtime_assignments
+--    / equipment / equipment_unavailable
+--  실행: Supabase 대시보드 → SQL Editor → 전체 붙여넣고 Run (idempotent)
+--
+--  ⚠️ 기존 v1 보드를 업그레이드하는 경우엔 이 파일이 아니라
+--     supabase/migrate.sql 을 실행하세요(기존 데이터 보존).
 -- ============================================================
 
 -- ---------- 1. 테이블 ----------
-create table if not exists public.people (
+create table if not exists public.members (
   id         text primary key,
   name       text    not null,
   color      text    not null,
   active     boolean not null default true,
-  sort       bigint  not null default 0,           -- 표시 순서 (작을수록 위)
+  sort       bigint  not null default 0,
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.attendance (
+create table if not exists public.absences (
   id         text primary key,
-  date       text not null,                         -- YYYY-MM-DD
-  person_id  text not null references public.people(id) on delete cascade,
-  type       text not null,
+  member_id  text not null references public.members(id) on delete cascade,
+  start_date text not null,                       -- YYYY-MM-DD
+  end_date   text not null,                       -- YYYY-MM-DD
+  type       text not null default 'annual',      -- vacation|annual|training|out|family|etc
+  label      text not null default '',            -- 자유 라벨 (비면 유형명 표시)
+  memo       text not null default '',
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.overtime (
+create table if not exists public.overtime_availability (
   id         text primary key,
-  date       text not null,                         -- YYYY-MM-DD
-  person_id  text not null references public.people(id) on delete cascade,
-  created_at timestamptz not null default now()
+  member_id  text not null references public.members(id) on delete cascade,
+  date       text not null,                       -- YYYY-MM-DD
+  created_at timestamptz not null default now(),
+  unique (member_id, date)
 );
 
-create table if not exists public.equipment_blocks (
+create table if not exists public.overtime_assignments (
   id         text primary key,
-  name       text not null,
-  reason     text not null default '',
-  start_date text not null,                         -- YYYY-MM-DD
-  end_date   text not null,                         -- YYYY-MM-DD
-  created_at timestamptz not null default now()
+  date       text not null,                       -- YYYY-MM-DD
+  member_id  text not null references public.members(id) on delete cascade,
+  method     text not null default 'agree',       -- random|agree
+  created_at timestamptz not null default now(),
+  unique (date, member_id)
 );
 
-create table if not exists public.equipment_list (
+create table if not exists public.equipment (
   id         text primary key,
   name       text not null,
   category   text,
@@ -46,18 +55,23 @@ create table if not exists public.equipment_list (
   created_at timestamptz not null default now()
 );
 
--- ---------- 2. RLS (공유 보드: 익명 포함 누구나 읽기/쓰기) ----------
-alter table public.people           enable row level security;
-alter table public.attendance       enable row level security;
-alter table public.overtime         enable row level security;
-alter table public.equipment_blocks enable row level security;
-alter table public.equipment_list   enable row level security;
+create table if not exists public.equipment_unavailable (
+  id          text primary key,
+  equipment_id text not null references public.equipment(id) on delete cascade,
+  start_date  text not null,                      -- YYYY-MM-DD
+  end_date    text not null,                      -- YYYY-MM-DD
+  reason      text not null default '',
+  reported_by text not null default '',
+  created_at  timestamptz not null default now()
+);
 
+-- ---------- 2. RLS (공유 보드: 익명 포함 누구나 읽기/쓰기) ----------
 do $$
 declare t text;
 begin
-  foreach t in array array['people','attendance','overtime','equipment_blocks','equipment_list']
+  foreach t in array array['members','absences','overtime_availability','overtime_assignments','equipment','equipment_unavailable']
   loop
+    execute format('alter table public.%I enable row level security;', t);
     execute format('drop policy if exists "public_all" on public.%I;', t);
     execute format(
       'create policy "public_all" on public.%I for all to anon, authenticated using (true) with check (true);',
@@ -66,13 +80,12 @@ begin
   end loop;
 end $$;
 
--- ---------- 3. 실시간(Realtime) 활성화 ----------
+-- ---------- 3. 실시간(Realtime) ----------
 do $$
 declare t text;
 begin
-  foreach t in array array['people','attendance','overtime','equipment_blocks','equipment_list']
+  foreach t in array array['members','absences','overtime_availability','overtime_assignments','equipment','equipment_unavailable']
   loop
-    -- 이미 publication 에 들어있으면 무시
     begin
       execute format('alter publication supabase_realtime add table public.%I;', t);
     exception when duplicate_object then null;
@@ -80,17 +93,17 @@ begin
   end loop;
 end $$;
 
--- ---------- 4. 시드 (팀원 + 설비 마스터) ----------
-insert into public.people (id, name, color, active, sort) values
-  ('seungri', '승리', '#10b981', true, 0),
-  ('eunbi',   '은비', '#1d4ed8', true, 1),
-  ('jaei',    '재이', '#ef4444', true, 2),
-  ('yujeong', '유정', '#f97316', true, 3),
-  ('hyeri',   '혜리', '#f59e0b', true, 4),
-  ('hanbyeol','한별', '#8b5cf6', true, 5)
+-- ---------- 4. 시드 (팀원 + 설비 마스터) — 신규 설치용 ----------
+insert into public.members (id, name, color, active, sort) values
+  ('seungri', '승리', '#16A085', true, 0),
+  ('eunbi',   '은비', '#1428A0', true, 1),
+  ('jaei',    '재이', '#E74C3C', true, 2),
+  ('yujeong', '유정', '#FF6B4A', true, 3),
+  ('hyeri',   '혜리', '#F39C12', true, 4),
+  ('hanbyeol','한별', '#8E44AD', true, 5)
 on conflict (id) do nothing;
 
-insert into public.equipment_list (id, name, category, sort) values
+insert into public.equipment (id, name, category, sort) values
   ('e-align2','ALIGN2','ALIGNER',0),
   ('e-align6','ALIGN6','ALIGNER',1),
   ('e-etche7a','ETCHE7_A',null,2),
@@ -116,7 +129,7 @@ insert into public.equipment_list (id, name, category, sort) values
   ('e-rtpan1','RTPAN1','RTP',22),
   ('e-rtpan4','RTPAN4','RTP',23),
   ('e-sputt1a','SPUTT1_A(Mo)',null,24),
-  ('e-sputt1b','SPUTT1_B',null,25),
+  ('e-sputt1b','SPUTT1_B(AlNd)',null,25),
   ('e-sputt1c','SPUTT1_C(TiO2)',null,26),
   ('e-sputt2a','SPUTT2_A(ITO)',null,27),
   ('e-sputt2b','SPUTT2_B(W)',null,28),

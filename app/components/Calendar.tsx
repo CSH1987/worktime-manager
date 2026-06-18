@@ -2,66 +2,56 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  HOLIDAYS,
   WEEKDAYS,
-  fromKey,
-  nameOf,
+  absenceDisplayLabel,
+  chipBg,
+  FAMILY_DAY_COLOR,
+  isFamilyDay,
+  rangeKeys,
   toKey,
-  typeStyle,
+  typeColor,
 } from "../lib/data";
+import { holidayName } from "../lib/holidays";
 import type { AppData, ViewMode } from "../lib/types";
 
 interface CalendarProps {
   data: AppData;
   view: ViewMode;
-  people: AppData["people"];
   year: number;
   month: number; // 0-based
   todayKey: string;
   onPrev: () => void;
   onNext: () => void;
   onToday: () => void;
-  onSelectDates: (dates: string[]) => void;
-  onRemoveAttendance: (id: string) => void;
-  onRemoveOvertimeForDay: (date: string) => void;
-}
-
-/** 두 날짜 키 사이의 모든 날짜(포함) 반환 */
-function rangeBetween(a: string, b: string): string[] {
-  const start = fromKey(a <= b ? a : b);
-  const end = fromKey(a <= b ? b : a);
-  const out: string[] = [];
-  const cur = new Date(start);
-  while (cur <= end) {
-    out.push(toKey(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return out;
+  onSelectDay: (key: string) => void;
+  onSelectRange: (keys: string[]) => void;
 }
 
 export default function Calendar({
   data,
   view,
-  people,
   year,
   month,
   todayKey,
   onPrev,
   onNext,
   onToday,
-  onSelectDates,
-  onRemoveAttendance,
-  onRemoveOvertimeForDay,
+  onSelectDay,
+  onSelectRange,
 }: CalendarProps) {
-  const { attendance, overtime } = data;
   const [dragStart, setDragStart] = useState<string | null>(null);
   const [dragEnd, setDragEnd] = useState<string | null>(null);
 
-  // 42칸(6주) 그리드 — 해당 월 1일이 속한 주의 일요일부터
+  const nameOf = useCallback(
+    (id: string) => data.members.find((m) => m.id === id)?.name ?? "?",
+    [data.members],
+  );
+
+  // 42칸(6주) 그리드 — 1일이 속한 주의 일요일부터
   const cells = useMemo(() => {
     const first = new Date(year, month, 1);
     const start = new Date(first);
-    start.setDate(1 - first.getDay()); // back to Sunday
+    start.setDate(1 - first.getDay());
     return Array.from({ length: 42 }, (_, i) => {
       const d = new Date(start);
       d.setDate(start.getDate() + i);
@@ -70,18 +60,19 @@ export default function Calendar({
   }, [year, month]);
 
   const selecting = useMemo(() => {
-    if (!dragStart || !dragEnd) return new Set<string>();
-    return new Set(rangeBetween(dragStart, dragEnd));
+    if (!dragStart || !dragEnd || dragStart === dragEnd) return new Set<string>();
+    return new Set(rangeKeys(dragStart, dragEnd));
   }, [dragStart, dragEnd]);
 
-  // 드래그 종료 — 문서 전역 mouseup
   const finishDrag = useCallback(() => {
     if (dragStart && dragEnd) {
-      onSelectDates(rangeBetween(dragStart, dragEnd));
+      const keys = rangeKeys(dragStart, dragEnd);
+      if (keys.length === 1) onSelectDay(keys[0]);
+      else onSelectRange(keys);
     }
     setDragStart(null);
     setDragEnd(null);
-  }, [dragStart, dragEnd, onSelectDates]);
+  }, [dragStart, dragEnd, onSelectDay, onSelectRange]);
 
   useEffect(() => {
     if (!dragStart) return;
@@ -89,21 +80,8 @@ export default function Calendar({
     return () => window.removeEventListener("pointerup", finishDrag);
   }, [dragStart, finishDrag]);
 
-  const attendanceByDate = useMemo(() => {
-    const map = new Map<string, typeof attendance>();
-    for (const r of attendance) {
-      (map.get(r.date) ?? map.set(r.date, []).get(r.date)!).push(r);
-    }
-    return map;
-  }, [attendance]);
-
-  const overtimeByDate = useMemo(() => {
-    const map = new Map<string, typeof overtime>();
-    for (const r of overtime) {
-      (map.get(r.date) ?? map.set(r.date, []).get(r.date)!).push(r);
-    }
-    return map;
-  }, [overtime]);
+  const showAbs = view !== "잔업";
+  const showOt = view !== "근태";
 
   return (
     <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -111,7 +89,8 @@ export default function Calendar({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-            {year} · <span className="text-indigo-600">{month + 1}월</span>
+            {year} <span className="text-slate-300">·</span>{" "}
+            <span className="text-[#1428A0]">{month + 1}월</span>
           </h1>
           <p className="mt-1 text-sm text-slate-400">
             날짜를 드래그하면 여러 날을 한 번에 등록할 수 있어요.
@@ -127,7 +106,7 @@ export default function Calendar({
           </button>
           <button
             onClick={onToday}
-            className="whitespace-nowrap px-3 text-sm font-semibold text-slate-700"
+            className="whitespace-nowrap px-3 text-sm font-semibold text-slate-700 hover:text-slate-900"
           >
             오늘
           </button>
@@ -165,22 +144,23 @@ export default function Calendar({
           const key = toKey(d);
           const inMonth = d.getMonth() === month;
           const dow = d.getDay();
-          const holiday = HOLIDAYS[key];
+          const holiday = holidayName(key);
+          const family = !holiday && isFamilyDay(key);
           const isToday = key === todayKey;
           const inSelection = selecting.has(key);
 
-          const att = inMonth ? (attendanceByDate.get(key) ?? []) : [];
-          const ot = inMonth ? (overtimeByDate.get(key) ?? []) : [];
+          const dayAbs = inMonth
+            ? data.absences.filter((a) => a.startDate <= key && key <= a.endDate)
+            : [];
+          const availCount = inMonth
+            ? data.availability.filter((a) => a.date === key).length
+            : 0;
+          const dayAssign = inMonth
+            ? data.assignments.filter((a) => a.date === key)
+            : [];
 
-          const showAtt = view !== "잔업";
-          const showOt = view !== "근태";
-
-          const badge =
-            view === "근태"
-              ? att.length
-              : view === "잔업"
-                ? ot.length
-                : att.length + ot.length;
+          const visibleAbs = dayAbs.slice(0, 3);
+          const moreAbs = dayAbs.length - visibleAbs.length;
 
           const numColor = !inMonth
             ? "text-slate-300"
@@ -196,7 +176,7 @@ export default function Calendar({
               role={inMonth ? "button" : undefined}
               tabIndex={inMonth ? 0 : undefined}
               aria-label={
-                inMonth ? `${month + 1}월 ${d.getDate()}일 일정 등록` : undefined
+                inMonth ? `${month + 1}월 ${d.getDate()}일 등록` : undefined
               }
               onPointerDown={() => {
                 if (!inMonth) return;
@@ -209,76 +189,84 @@ export default function Calendar({
               onKeyDown={(e) => {
                 if (inMonth && (e.key === "Enter" || e.key === " ")) {
                   e.preventDefault();
-                  onSelectDates([key]);
+                  onSelectDay(key);
                 }
               }}
               className={`relative flex min-h-[88px] flex-col bg-white p-1.5 sm:min-h-[120px] sm:p-2 ${
                 inMonth ? "cursor-pointer" : "bg-slate-50"
               } ${inSelection ? "ring-2 ring-inset ring-indigo-400" : ""} ${
-                isToday ? "ring-2 ring-inset ring-indigo-500" : ""
-              } focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500`}
+                isToday ? "ring-2 ring-inset ring-[#1428A0]" : ""
+              } focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1428A0]`}
             >
-              {/* 날짜 번호 + 공휴일 + 배지 */}
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-1.5">
+              {/* 날짜 번호 + (공휴일명) + 배지 */}
+              <div className="flex items-start justify-between gap-1">
+                <div className="flex min-w-0 items-center gap-1.5">
                   <span className={`text-sm font-semibold ${numColor}`}>
                     {d.getDate()}
                   </span>
                   {holiday && (
-                    <span className="text-[11px] font-medium text-rose-500">
+                    <span className="truncate text-[11px] font-medium text-rose-500">
                       {holiday}
                     </span>
                   )}
                 </div>
-                {badge > 0 && (
-                  <span className="flex items-center gap-1 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-600">
+                {showOt && availCount > 0 && (
+                  <span
+                    className="flex shrink-0 items-center gap-1 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-600"
+                    title={`잔업 가능 ${availCount}명`}
+                  >
                     <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
-                    {badge}
+                    {availCount}
                   </span>
                 )}
               </div>
 
-              {/* 근태 칩 */}
-              {showAtt && att.length > 0 && (
-                <div className="mt-1.5 space-y-1">
-                  {att.map((r) => {
-                    const st = typeStyle(r.type);
-                    return (
-                      <button
-                        key={r.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onRemoveAttendance(r.id);
-                        }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        title="클릭하면 삭제됩니다"
-                        className={`flex w-full items-center gap-1 truncate rounded px-1.5 py-0.5 text-left text-[11px] font-medium ${st.bg} ${st.text}`}
-                      >
-                        <span
-                          className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot}`}
-                        />
-                        <span className="truncate">
-                          {nameOf(people, r.personId)} · {r.type}
-                        </span>
-                      </button>
-                    );
-                  })}
+              {/* 패밀리데이 (전 사원 휴무) */}
+              {family && (
+                <div
+                  className="mt-1 inline-flex w-fit items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold"
+                  style={{ background: chipBg(FAMILY_DAY_COLOR), color: FAMILY_DAY_COLOR }}
+                  title="패밀리데이 (전 사원 휴무)"
+                >
+                  <span aria-hidden>⛺</span> 패밀리데이
                 </div>
               )}
 
-              {/* 잔업 바 */}
-              {showOt && ot.length > 0 && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemoveOvertimeForDay(key);
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  title="클릭하면 이 날의 잔업이 삭제됩니다"
-                  className="mt-auto w-full truncate rounded-md bg-indigo-700 px-2 py-1 text-left text-[11px] font-semibold text-white hover:bg-indigo-800"
-                >
-                  잔업 {ot.map((r) => nameOf(people, r.personId)).join(", ")}
-                </button>
+              {/* 부재 칩 (최대 3개 + N 더보기) */}
+              {showAbs && visibleAbs.length > 0 && (
+                <div className="mt-1.5 space-y-1">
+                  {visibleAbs.map((a) => {
+                    const color = typeColor(a.type);
+                    return (
+                      <div
+                        key={a.id}
+                        className="flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[11px] font-medium"
+                        style={{ background: chipBg(color), color }}
+                      >
+                        <span
+                          className="h-1.5 w-1.5 shrink-0 rounded-full"
+                          style={{ background: color }}
+                        />
+                        <span className="truncate">
+                          {nameOf(a.memberId)} · {absenceDisplayLabel(a)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {moreAbs > 0 && (
+                    <div className="px-1 text-[11px] font-medium text-slate-400">
+                      +{moreAbs} 더보기
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 잔업 확정 바 */}
+              {showOt && dayAssign.length > 0 && (
+                <div className="mt-auto w-full truncate rounded-md bg-gradient-to-r from-[#1f2a5a] to-[#2b3a7a] px-2 py-1 pt-1 text-left text-[11px] font-semibold text-white">
+                  <span className="opacity-70">잔업</span>{" "}
+                  {dayAssign.map((a) => nameOf(a.memberId)).join(", ")}
+                </div>
               )}
             </div>
           );

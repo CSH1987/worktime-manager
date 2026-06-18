@@ -1,80 +1,230 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { isConfigured, supabase } from "./supabase";
+import { supabase } from "./supabase";
+import { buildMockData } from "./mock";
 import type {
+  AbsenceType,
   AppData,
-  AttendanceRecord,
-  AttendanceType,
-  EquipmentBlock,
-  EquipmentItem,
-  OvertimeRecord,
-  Person,
+  Member,
+  OvertimeMethod,
 } from "./types";
 
-let idCounter = 0;
-const newId = () => `r${Date.now().toString(36)}-${idCounter++}`;
-/** 신규 항목 정렬값 — 시드(0..N) 뒤에 붙도록 큰 수 사용 */
-const nextSort = () => Date.now();
+/* ============================================================
+ *  Store — 낙관적 로컬 업데이트 + 얇은 백엔드(Supabase | mock)
+ *  스토어가 "다음 스냅샷(next)" 과 "DB 작업(Op)" 을 모두 만들고,
+ *  백엔드는 그것을 받아 영속화만 한다.
+ *    - Supabase: Op 를 SQL 로 실행 (realtime 으로 정합성 보정)
+ *    - mock: next 를 그대로 보관 (운영 데이터 무관, 로컬 테스트용)
+ * ========================================================== */
 
 export type Status = "unconfigured" | "loading" | "ready" | "error";
 
 const EMPTY: AppData = {
-  people: [],
-  attendance: [],
-  overtime: [],
+  members: [],
+  absences: [],
+  availability: [],
+  assignments: [],
   equipment: [],
-  equipmentList: [],
+  unavailable: [],
 };
 
-/* ---------- row <-> 타입 매핑 (DB 컬럼은 snake_case) ---------- */
+let idCounter = 0;
+const newId = () => `r${Date.now().toString(36)}-${idCounter++}`;
+const nextSort = () => Date.now();
+
+const clone = (d: AppData): AppData => ({
+  members: d.members.map((x) => ({ ...x })),
+  absences: d.absences.map((x) => ({ ...x })),
+  availability: d.availability.map((x) => ({ ...x })),
+  assignments: d.assignments.map((x) => ({ ...x })),
+  equipment: d.equipment.map((x) => ({ ...x })),
+  unavailable: d.unavailable.map((x) => ({ ...x })),
+});
+
+/* ---------- DB row 매핑 (snake_case) ---------- */
 type Row = Record<string, unknown>;
-const toPerson = (r: Row): Person => ({
+const toMember = (r: Row): Member => ({
   id: r.id as string,
   name: r.name as string,
   color: r.color as string,
   active: r.active as boolean,
 });
-const toAtt = (r: Row): AttendanceRecord => ({
+const toAbsence = (r: Row) => ({
   id: r.id as string,
-  date: r.date as string,
-  personId: r.person_id as string,
-  type: r.type as AttendanceType,
-});
-const toOt = (r: Row): OvertimeRecord => ({
-  id: r.id as string,
-  date: r.date as string,
-  personId: r.person_id as string,
-});
-const toBlock = (r: Row): EquipmentBlock => ({
-  id: r.id as string,
-  name: r.name as string,
-  reason: (r.reason as string) ?? "",
+  memberId: r.member_id as string,
   startDate: r.start_date as string,
   endDate: r.end_date as string,
+  type: r.type as AbsenceType,
+  label: (r.label as string) ?? "",
+  memo: (r.memo as string) ?? "",
 });
-const toItem = (r: Row): EquipmentItem => ({
+const toAvail = (r: Row) => ({
+  id: r.id as string,
+  memberId: r.member_id as string,
+  date: r.date as string,
+});
+const toAssign = (r: Row) => ({
+  id: r.id as string,
+  date: r.date as string,
+  memberId: r.member_id as string,
+  method: r.method as OvertimeMethod,
+});
+const toEquip = (r: Row) => ({
   id: r.id as string,
   name: r.name as string,
   category: (r.category as string) ?? undefined,
 });
+const toUnavail = (r: Row) => ({
+  id: r.id as string,
+  equipmentId: r.equipment_id as string,
+  startDate: r.start_date as string,
+  endDate: r.end_date as string,
+  reason: (r.reason as string) ?? "",
+  reportedBy: (r.reported_by as string) ?? "",
+});
+
+/* ---------- Op (DB 변경 디스크립터) ---------- */
+type Op =
+  | { kind: "member.insert"; row: Row }
+  | { kind: "member.update"; id: string; patch: Row }
+  | { kind: "member.remove"; id: string }
+  | { kind: "absence.insertMany"; rows: Row[] }
+  | { kind: "absence.remove"; id: string }
+  | { kind: "avail.insertMany"; rows: Row[] }
+  | { kind: "avail.removeMany"; ids: string[] }
+  | { kind: "assign.insert"; row: Row }
+  | { kind: "assign.remove"; id: string }
+  | { kind: "equip.insert"; row: Row }
+  | { kind: "equip.remove"; id: string }
+  | { kind: "unavail.insert"; row: Row }
+  | { kind: "unavail.remove"; id: string };
+
+/* ---------- 백엔드 인터페이스 ---------- */
+interface Backend {
+  load(): Promise<AppData>;
+  watch(cb: () => void): () => void;
+  persist(op: Op, next: AppData): Promise<void>;
+}
+
+/* ---------- mock 백엔드 (인메모리) ---------- */
+function mockBackend(): Backend {
+  let data = buildMockData();
+  return {
+    async load() {
+      return clone(data);
+    },
+    watch() {
+      return () => {};
+    },
+    async persist(_op, next) {
+      data = clone(next);
+    },
+  };
+}
+
+/* ---------- Supabase 백엔드 ---------- */
+function supabaseBackend(sb: NonNullable<typeof supabase>): Backend {
+  return {
+    async load() {
+      const [members, absences, avail, assign, equip, unavail] =
+        await Promise.all([
+          sb.from("members").select("*").order("sort"),
+          sb.from("absences").select("*"),
+          sb.from("overtime_availability").select("*"),
+          sb.from("overtime_assignments").select("*"),
+          sb.from("equipment").select("*").order("sort"),
+          sb.from("equipment_unavailable").select("*").order("start_date"),
+        ]);
+      const err =
+        members.error ||
+        absences.error ||
+        avail.error ||
+        assign.error ||
+        equip.error ||
+        unavail.error;
+      if (err) throw new Error(err.message);
+      return {
+        members: (members.data ?? []).map(toMember),
+        absences: (absences.data ?? []).map(toAbsence),
+        availability: (avail.data ?? []).map(toAvail),
+        assignments: (assign.data ?? []).map(toAssign),
+        equipment: (equip.data ?? []).map(toEquip),
+        unavailable: (unavail.data ?? []).map(toUnavail),
+      };
+    },
+    watch(cb) {
+      const ch = sb
+        .channel("kuntae-realtime")
+        .on("postgres_changes", { event: "*", schema: "public" }, () => cb())
+        .subscribe();
+      return () => {
+        sb.removeChannel(ch);
+      };
+    },
+    async persist(op) {
+      const run = async (p: PromiseLike<{ error: unknown }>) => {
+        const { error } = await p;
+        if (error) throw error;
+      };
+      switch (op.kind) {
+        case "member.insert":
+          return run(sb.from("members").insert(op.row));
+        case "member.update":
+          return run(sb.from("members").update(op.patch).eq("id", op.id));
+        case "member.remove":
+          return run(sb.from("members").delete().eq("id", op.id));
+        case "absence.insertMany":
+          if (!op.rows.length) return;
+          return run(sb.from("absences").insert(op.rows));
+        case "absence.remove":
+          return run(sb.from("absences").delete().eq("id", op.id));
+        case "avail.insertMany":
+          if (!op.rows.length) return;
+          return run(sb.from("overtime_availability").insert(op.rows));
+        case "avail.removeMany":
+          if (!op.ids.length) return;
+          return run(
+            sb.from("overtime_availability").delete().in("id", op.ids),
+          );
+        case "assign.insert":
+          return run(sb.from("overtime_assignments").insert(op.row));
+        case "assign.remove":
+          return run(sb.from("overtime_assignments").delete().eq("id", op.id));
+        case "equip.insert":
+          return run(sb.from("equipment").insert(op.row));
+        case "equip.remove":
+          return run(sb.from("equipment").delete().eq("id", op.id));
+        case "unavail.insert":
+          return run(sb.from("equipment_unavailable").insert(op.row));
+        case "unavail.remove":
+          return run(sb.from("equipment_unavailable").delete().eq("id", op.id));
+      }
+    },
+  };
+}
+
+/* ---------- 백엔드 선택 ---------- */
+const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "1";
+const backend: Backend | null = USE_MOCK
+  ? mockBackend()
+  : supabase
+    ? supabaseBackend(supabase)
+    : null;
 
 /* ---------- external store ---------- */
 let currentData: AppData = EMPTY;
-let status: Status = isConfigured ? "loading" : "unconfigured";
-let snapshot: { data: AppData; status: Status } = {
-  data: EMPTY,
-  status,
-};
+let status: Status = backend ? "loading" : "unconfigured";
+let snapshot: { data: AppData; status: Status } = { data: EMPTY, status };
 const SERVER_SNAPSHOT = { data: EMPTY, status: "loading" as Status };
-
 const listeners = new Set<() => void>();
+
 function publish() {
   snapshot = { data: currentData, status };
   listeners.forEach((l) => l());
 }
-function setData(data: AppData) {
-  currentData = data;
+function setData(d: AppData) {
+  currentData = d;
   publish();
 }
 function setStatus(s: Status) {
@@ -82,55 +232,24 @@ function setStatus(s: Status) {
   publish();
 }
 
-async function fetchAll() {
-  const sb = supabase;
-  if (!sb) return;
+async function loadAll() {
+  if (!backend) return;
   try {
-    const [people, attendance, overtime, blocks, items] = await Promise.all([
-      sb.from("people").select("*").order("sort"),
-      sb.from("attendance").select("*"),
-      sb.from("overtime").select("*"),
-      sb.from("equipment_blocks").select("*").order("start_date"),
-      sb.from("equipment_list").select("*").order("sort"),
-    ]);
-    const err =
-      people.error ||
-      attendance.error ||
-      overtime.error ||
-      blocks.error ||
-      items.error;
-    if (err) {
-      console.error("[store] fetch error:", err.message);
-      setStatus("error");
-      return;
-    }
-    currentData = {
-      people: (people.data ?? []).map(toPerson),
-      attendance: (attendance.data ?? []).map(toAtt),
-      overtime: (overtime.data ?? []).map(toOt),
-      equipment: (blocks.data ?? []).map(toBlock),
-      equipmentList: (items.data ?? []).map(toItem),
-    };
+    currentData = await backend.load();
     status = "ready";
     publish();
   } catch (e) {
-    console.error("[store] fetch threw:", e);
+    console.error("[store] load failed:", e);
     setStatus("error");
   }
 }
 
 let started = false;
 function ensureStarted() {
-  if (started || !supabase) return;
+  if (started || !backend) return;
   started = true;
-  fetchAll();
-  // 어떤 변경이든 들어오면 전체 재조회 (데이터셋이 작아 단순/안전)
-  supabase
-    .channel("kuntae-realtime")
-    .on("postgres_changes", { event: "*", schema: "public" }, () => {
-      fetchAll();
-    })
-    .subscribe();
+  loadAll();
+  backend.watch(() => loadAll());
 }
 
 function subscribe(cb: () => void) {
@@ -141,299 +260,297 @@ function subscribe(cb: () => void) {
   };
 }
 
-/* ---------- 낙관적 업데이트 헬퍼 ---------- */
-/** 로컬을 먼저 바꾸고 DB에 반영. 실패하면 서버 상태로 되돌림(재조회). */
-async function optimistic(
-  local: AppData,
-  write: () => PromiseLike<{ error: unknown }>,
-) {
-  setData(local);
-  const { error } = await write();
-  if (error) {
-    console.error("[store] write error:", error);
-    fetchAll();
+/** 낙관적 업데이트: 로컬 먼저 → 영속화 실패 시 재조회 */
+async function commit(next: AppData, op: Op) {
+  if (!backend) return;
+  setData(next);
+  try {
+    await backend.persist(op, next);
+  } catch (e) {
+    console.error("[store] persist failed:", e);
+    loadAll();
   }
-  // 성공 시 realtime 이벤트가 fetchAll 을 호출해 정합성 보정
 }
 
-/* ---------- 근태 ---------- */
-async function addAttendance(
-  dates: string[],
-  personId: string,
-  type: AttendanceType,
-) {
-  const sb = supabase;
-  if (!sb) return;
-  const rows = dates
-    .filter(
-      (date) =>
-        !currentData.attendance.some(
-          (r) => r.date === date && r.personId === personId,
-        ),
-    )
-    .map((date) => ({ id: newId(), date, person_id: personId, type }));
-  if (rows.length === 0) return;
-  await optimistic(
-    {
-      ...currentData,
-      attendance: [...currentData.attendance, ...rows.map(toAtt)],
-    },
-    () => sb.from("attendance").insert(rows),
-  );
-}
-
-async function removeAttendance(id: string) {
-  const sb = supabase;
-  if (!sb) return;
-  await optimistic(
-    {
-      ...currentData,
-      attendance: currentData.attendance.filter((r) => r.id !== id),
-    },
-    () => sb.from("attendance").delete().eq("id", id),
-  );
-}
-
-/* ---------- 잔업 ---------- */
-async function addOvertime(dates: string[], personIds: string[]) {
-  const sb = supabase;
-  if (!sb) return;
-  const rows: { id: string; date: string; person_id: string }[] = [];
-  for (const date of dates) {
-    for (const personId of personIds) {
-      const exists = currentData.overtime.some(
-        (r) => r.date === date && r.personId === personId,
-      );
-      if (!exists) rows.push({ id: newId(), date, person_id: personId });
-    }
-  }
-  if (rows.length === 0) return;
-  await optimistic(
-    { ...currentData, overtime: [...currentData.overtime, ...rows.map(toOt)] },
-    () => sb.from("overtime").insert(rows),
-  );
-}
-
-async function removeOvertimeForDay(date: string) {
-  const sb = supabase;
-  if (!sb) return;
-  await optimistic(
-    {
-      ...currentData,
-      overtime: currentData.overtime.filter((r) => r.date !== date),
-    },
-    () => sb.from("overtime").delete().eq("date", date),
-  );
-}
+/* ============================================================
+ *  도메인 API
+ * ========================================================== */
 
 /* ---------- 팀원 ---------- */
-async function addPerson(name: string, color: string) {
-  const sb = supabase;
-  if (!sb) return;
-  const row = {
-    id: newId(),
-    name: name.trim(),
-    color,
-    active: true,
-    sort: nextSort(),
-  };
-  await optimistic(
-    { ...currentData, people: [...currentData.people, toPerson(row)] },
-    () => sb.from("people").insert(row),
+async function addMember(name: string, color: string) {
+  const id = newId();
+  const member: Member = { id, name: name.trim(), color, active: true };
+  await commit(
+    { ...currentData, members: [...currentData.members, member] },
+    { kind: "member.insert", row: { id, name: member.name, color, active: true, sort: nextSort() } },
   );
 }
-
-async function togglePerson(id: string) {
-  const sb = supabase;
-  if (!sb) return;
-  const target = currentData.people.find((p) => p.id === id);
-  if (!target) return;
-  const active = !target.active;
-  await optimistic(
+async function updateMemberColor(id: string, color: string) {
+  await commit(
     {
       ...currentData,
-      people: currentData.people.map((p) =>
-        p.id === id ? { ...p, active } : p,
+      members: currentData.members.map((m) =>
+        m.id === id ? { ...m, color } : m,
       ),
     },
-    () => sb.from("people").update({ active }).eq("id", id),
+    { kind: "member.update", id, patch: { color } },
+  );
+}
+async function toggleMember(id: string) {
+  const target = currentData.members.find((m) => m.id === id);
+  if (!target) return;
+  const active = !target.active;
+  await commit(
+    {
+      ...currentData,
+      members: currentData.members.map((m) =>
+        m.id === id ? { ...m, active } : m,
+      ),
+    },
+    { kind: "member.update", id, patch: { active } },
+  );
+}
+async function removeMember(id: string) {
+  await commit(
+    {
+      ...currentData,
+      members: currentData.members.filter((m) => m.id !== id),
+      absences: currentData.absences.filter((a) => a.memberId !== id),
+      availability: currentData.availability.filter((a) => a.memberId !== id),
+      assignments: currentData.assignments.filter((a) => a.memberId !== id),
+    },
+    { kind: "member.remove", id },
   );
 }
 
-async function removePerson(id: string) {
-  const sb = supabase;
-  if (!sb) return;
-  // DB는 ON DELETE CASCADE 로 근태/잔업도 정리 → 로컬도 동일하게
-  await optimistic(
+/* ---------- 부재 ---------- */
+export interface AbsenceSpec {
+  memberId: string;
+  startDate: string;
+  endDate: string;
+  type: AbsenceType;
+  label: string;
+  memo: string;
+}
+/** 여러 부재 행 일괄 삽입 (모달이 근무일 분할/단일기간 여부를 결정해 specs 전달) */
+async function addAbsences(specs: AbsenceSpec[]) {
+  if (!specs.length) return;
+  const rows = specs.map((s) => ({
+    id: newId(),
+    member_id: s.memberId,
+    start_date: s.startDate,
+    end_date: s.endDate,
+    type: s.type,
+    label: s.label,
+    memo: s.memo,
+  }));
+  const localAbs = rows.map(toAbsence);
+  await commit(
+    { ...currentData, absences: [...currentData.absences, ...localAbs] },
+    { kind: "absence.insertMany", rows },
+  );
+}
+async function removeAbsence(id: string) {
+  await commit(
     {
       ...currentData,
-      people: currentData.people.filter((p) => p.id !== id),
-      attendance: currentData.attendance.filter((r) => r.personId !== id),
-      overtime: currentData.overtime.filter((r) => r.personId !== id),
+      absences: currentData.absences.filter((a) => a.id !== id),
     },
-    () => sb.from("people").delete().eq("id", id),
+    { kind: "absence.remove", id },
+  );
+}
+
+/* ---------- 잔업 가능(후보) ---------- */
+async function setAvailability(memberId: string, date: string, on: boolean) {
+  const existing = currentData.availability.find(
+    (a) => a.memberId === memberId && a.date === date,
+  );
+  if (on) {
+    if (existing) return;
+    const id = newId();
+    await commit(
+      {
+        ...currentData,
+        availability: [...currentData.availability, { id, memberId, date }],
+      },
+      { kind: "avail.insertMany", rows: [{ id, member_id: memberId, date }] },
+    );
+  } else {
+    if (!existing) return;
+    await commit(
+      {
+        ...currentData,
+        availability: currentData.availability.filter(
+          (a) => a.id !== existing.id,
+        ),
+      },
+      { kind: "avail.removeMany", ids: [existing.id] },
+    );
+  }
+}
+/** 여러 (member,date) 후보 일괄 추가 (이미 있는 건 건너뜀) */
+async function addAvailabilities(memberIds: string[], dates: string[]) {
+  const rows: Row[] = [];
+  const localAdd: { id: string; memberId: string; date: string }[] = [];
+  for (const date of dates) {
+    for (const memberId of memberIds) {
+      const exists = currentData.availability.some(
+        (a) => a.memberId === memberId && a.date === date,
+      );
+      if (exists) continue;
+      const id = newId();
+      rows.push({ id, member_id: memberId, date });
+      localAdd.push({ id, memberId, date });
+    }
+  }
+  if (!rows.length) return;
+  await commit(
+    {
+      ...currentData,
+      availability: [...currentData.availability, ...localAdd],
+    },
+    { kind: "avail.insertMany", rows },
+  );
+}
+/** 해당 날짜들의 후보 전부 제거 */
+async function removeAvailabilityForDates(dates: string[]) {
+  const set = new Set(dates);
+  const ids = currentData.availability
+    .filter((a) => set.has(a.date))
+    .map((a) => a.id);
+  if (!ids.length) return;
+  await commit(
+    {
+      ...currentData,
+      availability: currentData.availability.filter((a) => !set.has(a.date)),
+    },
+    { kind: "avail.removeMany", ids },
+  );
+}
+
+/* ---------- 잔업 확정 ---------- */
+async function addAssignment(
+  date: string,
+  memberId: string,
+  method: OvertimeMethod,
+) {
+  const exists = currentData.assignments.some(
+    (a) => a.date === date && a.memberId === memberId,
+  );
+  if (exists) return;
+  const id = newId();
+  await commit(
+    {
+      ...currentData,
+      assignments: [
+        ...currentData.assignments,
+        { id, date, memberId, method },
+      ],
+    },
+    { kind: "assign.insert", row: { id, date, member_id: memberId, method } },
+  );
+}
+async function removeAssignment(date: string, memberId: string) {
+  const target = currentData.assignments.find(
+    (a) => a.date === date && a.memberId === memberId,
+  );
+  if (!target) return;
+  await commit(
+    {
+      ...currentData,
+      assignments: currentData.assignments.filter((a) => a.id !== target.id),
+    },
+    { kind: "assign.remove", id: target.id },
   );
 }
 
 /* ---------- 설비 마스터 ---------- */
-async function addEquipmentItem(name: string, category?: string) {
-  const sb = supabase;
-  if (!sb) return;
-  const row = {
-    id: newId(),
-    name: name.trim(),
-    category: category?.trim() || null,
-    sort: nextSort(),
-  };
-  await optimistic(
-    { ...currentData, equipmentList: [...currentData.equipmentList, toItem(row)] },
-    () => sb.from("equipment_list").insert(row),
-  );
-}
-
-async function removeEquipmentItem(id: string) {
-  const sb = supabase;
-  if (!sb) return;
-  await optimistic(
+async function addEquipment(name: string, category?: string) {
+  const id = newId();
+  await commit(
     {
       ...currentData,
-      equipmentList: currentData.equipmentList.filter((e) => e.id !== id),
+      equipment: [
+        ...currentData.equipment,
+        { id, name: name.trim(), category: category?.trim() || undefined },
+      ],
     },
-    () => sb.from("equipment_list").delete().eq("id", id),
+    {
+      kind: "equip.insert",
+      row: { id, name: name.trim(), category: category?.trim() || null, sort: nextSort() },
+    },
   );
 }
-
-/* ---------- 사용 불가 일정 ---------- */
-async function addEquipmentBlock(
-  name: string,
-  reason: string,
-  startDate: string,
-  endDate: string,
-) {
-  const sb = supabase;
-  if (!sb) return;
-  const row = {
-    id: newId(),
-    name,
-    reason,
-    start_date: startDate,
-    end_date: endDate,
-  };
-  await optimistic(
-    { ...currentData, equipment: [...currentData.equipment, toBlock(row)] },
-    () => sb.from("equipment_blocks").insert(row),
-  );
-}
-
-async function removeEquipmentBlock(id: string) {
-  const sb = supabase;
-  if (!sb) return;
-  await optimistic(
+async function removeEquipment(id: string) {
+  await commit(
     {
       ...currentData,
       equipment: currentData.equipment.filter((e) => e.id !== id),
     },
-    () => sb.from("equipment_blocks").delete().eq("id", id),
+    { kind: "equip.remove", id },
   );
 }
 
-/* ---------- 데이터 백업/복원 ---------- */
-function exportSnapshot(): AppData {
-  return currentData;
+/* ---------- 설비 사용 불가 ---------- */
+async function addUnavailable(
+  equipmentId: string,
+  startDate: string,
+  endDate: string,
+  reason: string,
+  reportedBy: string,
+) {
+  let s = startDate;
+  let e = endDate;
+  if (s > e) [s, e] = [e, s];
+  const id = newId();
+  await commit(
+    {
+      ...currentData,
+      unavailable: [
+        ...currentData.unavailable,
+        { id, equipmentId, startDate: s, endDate: e, reason, reportedBy },
+      ],
+    },
+    {
+      kind: "unavail.insert",
+      row: {
+        id,
+        equipment_id: equipmentId,
+        start_date: s,
+        end_date: e,
+        reason,
+        reported_by: reportedBy,
+      },
+    },
+  );
 }
-
-/** 가져온 객체를 검증 후 DB를 통째로 교체 (주의: 공용 데이터 전체 덮어쓰기) */
-async function importData(raw: unknown): Promise<boolean> {
-  const sb = supabase;
-  if (!sb) return false;
-  if (!raw || typeof raw !== "object") return false;
-  const d = raw as Partial<AppData>;
-  if (
-    !Array.isArray(d.people) ||
-    !Array.isArray(d.attendance) ||
-    !Array.isArray(d.overtime)
-  ) {
-    return false;
-  }
-  // 모두 비우고(자식부터) 다시 삽입
-  await sb.from("attendance").delete().neq("id", "");
-  await sb.from("overtime").delete().neq("id", "");
-  await sb.from("equipment_blocks").delete().neq("id", "");
-  await sb.from("people").delete().neq("id", "");
-  await sb.from("equipment_list").delete().neq("id", "");
-
-  if (d.people.length)
-    await sb.from("people").insert(
-      d.people.map((p, i) => ({
-        id: p.id,
-        name: p.name,
-        color: p.color,
-        active: p.active,
-        sort: i,
-      })),
-    );
-  if ((d.equipmentList ?? []).length)
-    await sb.from("equipment_list").insert(
-      (d.equipmentList ?? []).map((e, i) => ({
-        id: e.id,
-        name: e.name,
-        category: e.category ?? null,
-        sort: i,
-      })),
-    );
-  if (d.attendance.length)
-    await sb.from("attendance").insert(
-      d.attendance.map((r) => ({
-        id: r.id,
-        date: r.date,
-        person_id: r.personId,
-        type: r.type,
-      })),
-    );
-  if (d.overtime.length)
-    await sb.from("overtime").insert(
-      d.overtime.map((r) => ({ id: r.id, date: r.date, person_id: r.personId })),
-    );
-  if ((d.equipment ?? []).length)
-    await sb.from("equipment_blocks").insert(
-      (d.equipment ?? []).map((b) => ({
-        id: b.id,
-        name: b.name,
-        reason: b.reason,
-        start_date: b.startDate,
-        end_date: b.endDate,
-      })),
-    );
-  await fetchAll();
-  return true;
-}
-
-/** 근태/잔업/설비 일정만 비우기 (팀원·설비 마스터는 유지) */
-async function reset() {
-  const sb = supabase;
-  if (!sb) return;
-  await sb.from("attendance").delete().neq("id", "");
-  await sb.from("overtime").delete().neq("id", "");
-  await sb.from("equipment_blocks").delete().neq("id", "");
-  await fetchAll();
+async function removeUnavailable(id: string) {
+  await commit(
+    {
+      ...currentData,
+      unavailable: currentData.unavailable.filter((u) => u.id !== id),
+    },
+    { kind: "unavail.remove", id },
+  );
 }
 
 const api = {
-  addAttendance,
-  removeAttendance,
-  addOvertime,
-  removeOvertimeForDay,
-  addPerson,
-  togglePerson,
-  removePerson,
-  addEquipmentItem,
-  removeEquipmentItem,
-  addEquipmentBlock,
-  removeEquipmentBlock,
-  reset,
-  importData,
-  exportSnapshot,
-  refetch: fetchAll,
+  addMember,
+  updateMemberColor,
+  toggleMember,
+  removeMember,
+  addAbsences,
+  removeAbsence,
+  setAvailability,
+  addAvailabilities,
+  removeAvailabilityForDates,
+  addAssignment,
+  removeAssignment,
+  addEquipment,
+  removeEquipment,
+  addUnavailable,
+  removeUnavailable,
+  refetch: loadAll,
 };
 
 export function useStore() {
