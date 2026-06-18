@@ -5,6 +5,7 @@ import { useStore } from "../lib/store";
 import { formatRange, isWeekend } from "../lib/data";
 import { isPublicHoliday } from "../lib/holidays";
 import AbsenceModal from "./AbsenceModal";
+import { useConfirm } from "./ConfirmDialog";
 
 export default function RangeModal({
   dates,
@@ -14,6 +15,7 @@ export default function RangeModal({
   onClose: () => void;
 }) {
   const store = useStore();
+  const confirm = useConfirm();
   const members = store.data.members.filter((m) => m.active);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [includeWeekend, setIncludeWeekend] = useState(true);
@@ -48,16 +50,33 @@ export default function RangeModal({
     onClose();
   };
 
-  const clearAvail = () => {
+  const clearAvail = async () => {
+    if (
+      !(await confirm({
+        title: "잔업 가능 일괄 삭제",
+        message: `이 기간(${formatRange(first, last)})의 잔업 가능 후보를 모두 삭제할까요?`,
+        confirmText: "삭제",
+        danger: true,
+      }))
+    )
+      return;
     store.removeAvailabilityForDates(dates);
     onClose();
   };
 
-  const clearAbsences = () => {
-    if (!confirm("이 기간의 모든 부재를 삭제할까요?")) return;
+  const clearAbsences = async () => {
     const overlap = store.data.absences.filter(
       (a) => a.startDate <= last && a.endDate >= first,
     );
+    if (
+      !(await confirm({
+        title: "부재 일괄 삭제",
+        message: `이 기간(${formatRange(first, last)})의 부재 ${overlap.length}건을 모두 삭제할까요?`,
+        confirmText: "삭제",
+        danger: true,
+      }))
+    )
+      return;
     overlap.forEach((a) => store.removeAbsence(a.id));
     onClose();
   };

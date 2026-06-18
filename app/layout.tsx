@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
 import { ViewProvider } from "./components/ViewProvider";
+import { ConfirmProvider } from "./components/ConfirmDialog";
 import Header from "./components/Header";
 import StatusBanner from "./components/StatusBanner";
 
@@ -24,9 +25,11 @@ export default function RootLayout({
     <html lang="ko" className={`${geistSans.variable} h-full antialiased`}>
       <body className="min-h-full overflow-x-hidden">
         <ViewProvider>
-          <Header />
-          <StatusBanner />
-          {children}
+          <ConfirmProvider>
+            <Header />
+            <StatusBanner />
+            {children}
+          </ConfirmProvider>
         </ViewProvider>
       </body>
     </html>

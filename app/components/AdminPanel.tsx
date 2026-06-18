@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { COLOR_PALETTE } from "../lib/data";
 import type { Member, Equipment } from "../lib/types";
+import { useConfirm } from "./ConfirmDialog";
 
 export default function AdminPanel({
   members,
@@ -23,23 +24,66 @@ export default function AdminPanel({
   onAddEquipment: (name: string, category?: string) => void;
   onRemoveEquipment: (id: string) => void;
 }) {
+  const confirm = useConfirm();
   const [memberName, setMemberName] = useState("");
   const [memberColor, setMemberColor] = useState<string>(COLOR_PALETTE[0]);
 
   const [equipName, setEquipName] = useState("");
   const [equipCategory, setEquipCategory] = useState("");
 
-  const addMember = () => {
-    if (!memberName.trim()) return;
-    onAddMember(memberName.trim(), memberColor);
+  const addMember = async () => {
+    const name = memberName.trim();
+    if (!name) return;
+    if (
+      !(await confirm({
+        title: "팀원 추가",
+        message: `'${name}' 팀원을 추가할까요?`,
+        confirmText: "추가",
+      }))
+    )
+      return;
+    onAddMember(name, memberColor);
     setMemberName("");
   };
 
-  const addEquipment = () => {
-    if (!equipName.trim()) return;
-    onAddEquipment(equipName.trim(), equipCategory.trim() || undefined);
+  const addEquipment = async () => {
+    const name = equipName.trim();
+    if (!name) return;
+    if (
+      !(await confirm({
+        title: "설비 추가",
+        message: `'${name}' 설비를 추가할까요?`,
+        confirmText: "추가",
+      }))
+    )
+      return;
+    onAddEquipment(name, equipCategory.trim() || undefined);
     setEquipName("");
     setEquipCategory("");
+  };
+
+  const removeMember = async (m: Member) => {
+    if (
+      await confirm({
+        title: "팀원 삭제",
+        message: `'${m.name}' 팀원을 삭제할까요?\n관련 기록(부재·잔업)도 함께 삭제됩니다.`,
+        confirmText: "삭제",
+        danger: true,
+      })
+    )
+      onRemoveMember(m.id);
+  };
+
+  const removeEquipment = async (e: Equipment) => {
+    if (
+      await confirm({
+        title: "설비 삭제",
+        message: `'${e.name}' 설비를 삭제할까요?`,
+        confirmText: "삭제",
+        danger: true,
+      })
+    )
+      onRemoveEquipment(e.id);
   };
 
   return (
@@ -78,15 +122,7 @@ export default function AdminPanel({
                     {m.active ? "비활성" : "활성"}
                   </button>
                   <button
-                    onClick={() => {
-                      if (
-                        confirm(
-                          "이 팀원을 삭제할까요? 관련 기록도 함께 삭제됩니다.",
-                        )
-                      ) {
-                        onRemoveMember(m.id);
-                      }
-                    }}
+                    onClick={() => removeMember(m)}
                     className="font-medium text-slate-400 hover:text-rose-500"
                   >
                     삭제
@@ -146,7 +182,7 @@ export default function AdminPanel({
                   <span className="text-xs text-slate-400">{e.category}</span>
                 )}
                 <button
-                  onClick={() => onRemoveEquipment(e.id)}
+                  onClick={() => removeEquipment(e)}
                   className="ml-auto text-xs font-medium text-slate-400 hover:text-rose-500"
                 >
                   삭제

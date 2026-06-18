@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { toKey } from "../lib/data";
 import type { Equipment } from "../lib/types";
+import { useConfirm } from "./ConfirmDialog";
 
 export default function EquipmentUnavailableModal({
   equipment,
@@ -19,6 +20,7 @@ export default function EquipmentUnavailableModal({
     reportedBy: string,
   ) => void;
 }) {
+  const confirm = useConfirm();
   const today = toKey(new Date());
   const [equipmentId, setEquipmentId] = useState(equipment[0]?.id ?? "");
   const [startDate, setStartDate] = useState(today);
@@ -36,8 +38,17 @@ export default function EquipmentUnavailableModal({
 
   const canSubmit = equipmentId !== "" && startDate !== "" && endDate !== "";
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!canSubmit) return;
+    const eqName = equipment.find((e) => e.id === equipmentId)?.name ?? "";
+    if (
+      !(await confirm({
+        title: "사용 불가 등록",
+        message: `${eqName} (${startDate} ~ ${endDate})\n사용 불가로 등록할까요?`,
+        confirmText: "등록",
+      }))
+    )
+      return;
     onSubmit(equipmentId, startDate, endDate, reason.trim(), reportedBy.trim());
     onClose();
   };

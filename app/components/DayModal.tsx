@@ -9,6 +9,7 @@ import {
   typeColor,
 } from "../lib/data";
 import AbsenceModal from "./AbsenceModal";
+import { useConfirm } from "./ConfirmDialog";
 
 export default function DayModal({
   dateKey,
@@ -18,6 +19,7 @@ export default function DayModal({
   onClose: () => void;
 }) {
   const store = useStore();
+  const confirm = useConfirm();
   const [showAbsence, setShowAbsence] = useState(false);
   const [spinId, setSpinId] = useState<string | null>(null);
   const [agreePick, setAgreePick] = useState("");
@@ -141,7 +143,17 @@ export default function DayModal({
                           </span>
                         </span>
                         <button
-                          onClick={() => store.removeAbsence(a.id)}
+                          onClick={async () => {
+                            if (
+                              await confirm({
+                                title: "부재 삭제",
+                                message: `${nameOf(a.memberId)} · ${absenceDisplayLabel(a)} 부재를 삭제할까요?`,
+                                confirmText: "삭제",
+                                danger: true,
+                              })
+                            )
+                              store.removeAbsence(a.id);
+                          }}
                           aria-label="부재 삭제"
                           className="shrink-0 text-slate-400 hover:text-rose-500"
                         >
@@ -210,9 +222,17 @@ export default function DayModal({
                         </span>
                       </span>
                       <button
-                        onClick={() =>
-                          store.removeAssignment(dateKey, a.memberId)
-                        }
+                        onClick={async () => {
+                          if (
+                            await confirm({
+                              title: "잔업 확정 취소",
+                              message: `${nameOf(a.memberId)} 님의 잔업 확정을 취소할까요?`,
+                              confirmText: "취소(삭제)",
+                              danger: true,
+                            })
+                          )
+                            store.removeAssignment(dateKey, a.memberId);
+                        }}
                         aria-label="확정 취소"
                         className="text-slate-400 hover:text-rose-500"
                       >

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { formatRange } from "../lib/data";
 import type { Equipment, EquipmentUnavailable } from "../lib/types";
 import EquipmentUnavailableModal from "./EquipmentUnavailableModal";
+import { useConfirm } from "./ConfirmDialog";
 
 function ItemRow({
   block,
@@ -60,9 +61,23 @@ export default function EquipmentBoard({
   onRemove: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const confirm = useConfirm();
 
   const nameOf = (equipmentId: string) =>
     equipment.find((e) => e.id === equipmentId)?.name ?? "(삭제된 설비)";
+
+  const handleRemove = async (id: string) => {
+    const b = blocks.find((x) => x.id === id);
+    if (
+      await confirm({
+        title: "사용 불가 삭제",
+        message: `${b ? nameOf(b.equipmentId) : ""} 사용 불가 일정을 삭제할까요?`,
+        confirmText: "삭제",
+        danger: true,
+      })
+    )
+      onRemove(id);
+  };
 
   const { current, upcoming } = useMemo(() => {
     const cur: EquipmentUnavailable[] = [];
@@ -107,7 +122,7 @@ export default function EquipmentBoard({
                 key={b.id}
                 block={b}
                 name={nameOf(b.equipmentId)}
-                onRemove={onRemove}
+                onRemove={handleRemove}
               />
             ))}
           </ul>
@@ -128,7 +143,7 @@ export default function EquipmentBoard({
                 key={b.id}
                 block={b}
                 name={nameOf(b.equipmentId)}
-                onRemove={onRemove}
+                onRemove={handleRemove}
               />
             ))}
           </ul>

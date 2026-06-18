@@ -5,6 +5,7 @@ import { useStore, type AbsenceSpec } from "../lib/store";
 import { ABSENCE_TYPES, isWeekend, rangeKeys } from "../lib/data";
 import { isPublicHoliday } from "../lib/holidays";
 import type { AbsenceType } from "../lib/types";
+import { useConfirm } from "./ConfirmDialog";
 
 export default function AbsenceModal({
   defaultStart,
@@ -16,6 +17,7 @@ export default function AbsenceModal({
   onClose: () => void;
 }) {
   const store = useStore();
+  const confirm = useConfirm();
   const members = store.data.members.filter((m) => m.active);
 
   const [memberId, setMemberId] = useState(members[0]?.id ?? "");
@@ -36,7 +38,7 @@ export default function AbsenceModal({
 
   const multiDay = start !== end;
 
-  const submit = () => {
+  const submit = async () => {
     if (!memberId) return;
     let s = start;
     let e = end;
@@ -64,6 +66,18 @@ export default function AbsenceModal({
     } else {
       specs = [{ memberId, startDate: s, endDate: e, type, label, memo }];
     }
+
+    const who = members.find((m) => m.id === memberId)?.name ?? "";
+    const range = s === e ? s : `${s} ~ ${e}`;
+    if (
+      !(await confirm({
+        title: "부재 등록",
+        message: `${who} · ${range}\n부재를 등록할까요? (${specs.length}건)`,
+        confirmText: "등록",
+      }))
+    )
+      return;
+
     store.addAbsences(specs);
     onClose();
   };
