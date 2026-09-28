@@ -1,7 +1,9 @@
 // ============================================================
 //  백업/복원 스크립트 공용 — Supabase 클라이언트 + 테이블 목록
 //  연결 정보는 .env.local (없으면 셸 환경변수) 에서 읽는다.
+//  로그인 모드(NEXT_PUBLIC_REQUIRE_LOGIN=1)면 팀 계정으로 로그인한 뒤 작업한다.
 // ============================================================
+import { createInterface } from "node:readline/promises";
 import { createClient } from "@supabase/supabase-js";
 
 /** FK 순서 — 부모(members, equipment)가 먼저 와야 복원 시 참조 오류가 없다. */
@@ -14,7 +16,47 @@ export const TABLES = [
   "equipment_unavailable",
 ];
 
-export function clientFromEnv() {
+async function ask(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await rl.question(question);
+  rl.close();
+  return answer.trim();
+}
+
+/** 비밀번호 입력 — 터미널이면 입력한 글자를 화면에 표시하지 않는다 */
+function askHidden(question) {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) return ask(question); // 파이프 입력 등 (표시될 화면이 없음)
+  process.stdout.write(question);
+  return new Promise((resolve) => {
+    let buf = "";
+    const finish = () => {
+      stdin.off("data", onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      process.stdout.write("\n");
+      resolve(buf);
+    };
+    const onData = (chunk) => {
+      for (const c of chunk) {
+        if (c === "\r" || c === "\n") return finish();
+        if (c === "\u0003") {
+          stdin.setRawMode(false);
+          process.stdout.write("\n");
+          process.exit(130); // Ctrl+C
+        }
+        if (c === "\u007f" || c === "\b") buf = buf.slice(0, -1);
+        else buf += c;
+      }
+    };
+    stdin.setEncoding("utf8");
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on("data", onData);
+  });
+}
+
+export async function connect() {
   try {
     process.loadEnvFile(".env.local"); // 이미 셸에 있는 값은 덮어쓰지 않음
   } catch {
@@ -28,8 +70,18 @@ export function clientFromEnv() {
     );
     process.exit(1);
   }
-  return {
-    url,
-    sb: createClient(url, key, { auth: { persistSession: false } }),
-  };
+  const sb = createClient(url, key, { auth: { persistSession: false } });
+
+  const loginMode = process.env.NEXT_PUBLIC_REQUIRE_LOGIN === "1";
+  if (loginMode) {
+    // 로그인 모드 DB 는 익명으로 읽으면 빈 결과가 나오므로 반드시 로그인
+    const email = process.env.WTM_EMAIL || (await ask("팀 계정 이메일: "));
+    const password = process.env.WTM_PASSWORD || (await askHidden("비밀번호: "));
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) {
+      console.error(`로그인 실패: ${error.message}`);
+      process.exit(1);
+    }
+  }
+  return { url, sb, loginMode };
 }

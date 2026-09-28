@@ -5,6 +5,7 @@ import { ViewProvider } from "./components/ViewProvider";
 import { ConfirmProvider } from "./components/ConfirmDialog";
 import Header from "./components/Header";
 import StatusBanner from "./components/StatusBanner";
+import LoginGate from "./components/LoginGate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -26,9 +27,11 @@ export default function RootLayout({
       <body className="min-h-full overflow-x-hidden">
         <ViewProvider>
           <ConfirmProvider>
-            <Header />
-            <StatusBanner />
-            {children}
+            <LoginGate>
+              <Header />
+              <StatusBanner />
+              {children}
+            </LoginGate>
           </ConfirmProvider>
         </ViewProvider>
       </body>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { supabase } from "./supabase";
+import { requireLogin, supabase } from "./supabase";
 import { buildMockData } from "./mock";
 import type {
   AbsenceType,
@@ -18,7 +18,13 @@ import type {
  *    - mock: next 를 그대로 보관 (운영 데이터 무관, 로컬 테스트용)
  * ========================================================== */
 
-export type Status = "unconfigured" | "loading" | "ready" | "error";
+export type Status = "unconfigured" | "signedOut" | "loading" | "ready" | "error";
+
+/** 화면 상단에 알릴 문제 — load: 불러오기 실패(화면 사용 불가), save: 저장 실패 */
+export interface Problem {
+  kind: "load" | "save";
+  message: string;
+}
 
 const EMPTY: AppData = {
   members: [],
@@ -143,7 +149,7 @@ function supabaseBackend(sb: NonNullable<typeof supabase>): Backend {
         assign.error ||
         equip.error ||
         unavail.error;
-      if (err) throw new Error(err.message);
+      if (err) throw err; // code(PGRST205 등) 를 살려 배너에서 원인 안내
       return {
         members: (members.data ?? []).map(toMember),
         absences: (absences.data ?? []).map(toAbsence),
@@ -212,44 +218,130 @@ const backend: Backend | null = USE_MOCK
     ? supabaseBackend(supabase)
     : null;
 
+/** 로그인 모드는 실제 Supabase 백엔드일 때만 (mock/미설정은 로그인 없음) */
+const LOGIN = requireLogin && !USE_MOCK && backend !== null;
+
 /* ---------- external store ---------- */
+interface Snapshot {
+  data: AppData;
+  status: Status;
+  problem: Problem | null;
+  /** 로그인 모드에서 로그인한 이메일 */
+  user: string | null;
+}
 let currentData: AppData = EMPTY;
 let status: Status = backend ? "loading" : "unconfigured";
-let snapshot: { data: AppData; status: Status } = { data: EMPTY, status };
-const SERVER_SNAPSHOT = { data: EMPTY, status: "loading" as Status };
+let problem: Problem | null = null;
+let user: string | null = null;
+let snapshot: Snapshot = { data: EMPTY, status, problem, user };
+const SERVER_SNAPSHOT: Snapshot = {
+  data: EMPTY,
+  status: "loading",
+  problem: null,
+  user: null,
+};
 const listeners = new Set<() => void>();
 
 function publish() {
-  snapshot = { data: currentData, status };
+  snapshot = { data: currentData, status, problem, user };
   listeners.forEach((l) => l());
 }
 function setData(d: AppData) {
   currentData = d;
   publish();
 }
-function setStatus(s: Status) {
-  status = s;
-  publish();
+
+/** DB 오류를 설치하는 사람이 바로 조치할 수 있는 문장으로 바꾼다 */
+function describeDbError(e: unknown, action: Problem["kind"]): string {
+  const err = (e ?? {}) as { code?: string; message?: string };
+  const msg = err.message ?? String(e);
+  if (
+    err.code === "PGRST205" ||
+    err.code === "42P01" ||
+    /could not find the table|does not exist/i.test(msg)
+  ) {
+    return "DB에 테이블이 없습니다. Supabase → SQL Editor 에서 supabase/schema.sql 을 실행하세요.";
+  }
+  if (err.code === "42501" || /row-level security|permission denied/i.test(msg)) {
+    return LOGIN
+      ? "DB 권한이 없습니다. 로그인 상태와 supabase/login-mode.sql 실행 여부를 확인하세요."
+      : "DB 권한이 없습니다. DB를 로그인 전용(login-mode.sql)으로 바꿨다면 NEXT_PUBLIC_REQUIRE_LOGIN=1 로 다시 배포하세요.";
+  }
+  if (/invalid api key|no api key|jwt/i.test(msg)) {
+    return "Supabase 키가 올바르지 않습니다. NEXT_PUBLIC_SUPABASE_ANON_KEY 값을 확인하세요.";
+  }
+  if (/failed to fetch|networkerror|fetch failed|load failed/i.test(msg)) {
+    return "Supabase 에 연결하지 못했습니다. 인터넷 연결과 NEXT_PUBLIC_SUPABASE_URL 값을 확인하세요.";
+  }
+  return `${action === "load" ? "데이터를 불러오지 못했습니다" : "저장하지 못했습니다"}: ${msg}`;
 }
 
+/* ---------- 데이터 로드 + 실시간 구독 수명주기 ---------- */
+let running = false;
+let unwatch: (() => void) | null = null;
+let loadSeq = 0; // 가장 최근 요청 결과만 반영 (늦게 도착한 옛 응답·로그아웃 후 응답 무시)
+
 async function loadAll() {
-  if (!backend) return;
+  if (!backend || !running) return;
+  const seq = ++loadSeq;
   try {
-    currentData = await backend.load();
+    const d = await backend.load();
+    if (seq !== loadSeq) return;
+    currentData = d;
     status = "ready";
+    if (problem?.kind === "load") problem = null;
     publish();
   } catch (e) {
+    if (seq !== loadSeq) return;
     console.error("[store] load failed:", e);
-    setStatus("error");
+    status = "error";
+    problem = { kind: "load", message: describeDbError(e, "load") };
+    publish();
   }
+}
+
+function startData() {
+  if (running || !backend) return;
+  running = true;
+  loadAll();
+  unwatch = backend.watch(() => loadAll());
+}
+
+function stopData() {
+  running = false;
+  unwatch?.();
+  unwatch = null;
+  loadSeq++; // 진행 중인 load 결과 폐기
+  currentData = EMPTY;
+  problem = null;
 }
 
 let started = false;
 function ensureStarted() {
   if (started || !backend) return;
   started = true;
-  loadAll();
-  backend.watch(() => loadAll());
+  if (!LOGIN) {
+    startData();
+    return;
+  }
+  // 로그인 모드: 세션이 있을 때만 데이터를 불러오고 실시간 구독
+  supabase!.auth.onAuthStateChange((_event, session) => {
+    // 콜백 안에서 곧바로 supabase 를 호출하면 교착될 수 있어 다음 틱으로 미룸 (supabase-js 권고)
+    setTimeout(() => {
+      if (session) {
+        user = session.user.email ?? session.user.id;
+        if (!running) {
+          status = "loading";
+          startData();
+        }
+      } else {
+        user = null;
+        stopData();
+        status = "signedOut";
+      }
+      publish();
+    }, 0);
+  });
 }
 
 function subscribe(cb: () => void) {
@@ -262,14 +354,42 @@ function subscribe(cb: () => void) {
 
 /** 낙관적 업데이트: 로컬 먼저 → 영속화 실패 시 재조회 */
 async function commit(next: AppData, op: Op) {
-  if (!backend) return;
+  if (!backend || !running) return;
   setData(next);
   try {
     await backend.persist(op, next);
   } catch (e) {
     console.error("[store] persist failed:", e);
+    problem = { kind: "save", message: describeDbError(e, "save") };
+    publish();
     loadAll();
   }
+}
+
+/* ---------- 로그인 (로그인 모드 전용) ---------- */
+/** 성공하면 null, 실패하면 화면에 보여줄 한국어 메시지 */
+async function signIn(email: string, password: string): Promise<string | null> {
+  if (!supabase) return "Supabase 가 설정되지 않았습니다.";
+  const { error } = await supabase.auth.signInWithPassword({
+    email: email.trim(),
+    password,
+  });
+  if (!error) return null;
+  if (error.code === "invalid_credentials" || /invalid login credentials/i.test(error.message)) {
+    return "이메일 또는 비밀번호가 올바르지 않습니다.";
+  }
+  if (error.code === "email_not_confirmed") {
+    return "이메일 인증이 끝나지 않은 계정입니다. 관리자에게 계정 확인을 요청하세요.";
+  }
+  return `로그인하지 못했습니다: ${error.message}`;
+}
+async function signOut() {
+  await supabase?.auth.signOut();
+}
+function dismissProblem() {
+  if (problem?.kind !== "save") return;
+  problem = null;
+  publish();
 }
 
 /* ============================================================
@@ -551,6 +671,9 @@ const api = {
   addUnavailable,
   removeUnavailable,
   refetch: loadAll,
+  signIn,
+  signOut,
+  dismissProblem,
 };
 
 export function useStore() {
@@ -559,7 +682,14 @@ export function useStore() {
     () => snapshot,
     () => SERVER_SNAPSHOT,
   );
-  return { data: snap.data, status: snap.status, ...api };
+  return {
+    data: snap.data,
+    status: snap.status,
+    problem: snap.problem,
+    user: snap.user,
+    loginMode: LOGIN,
+    ...api,
+  };
 }
 
 export type Store = ReturnType<typeof useStore>;

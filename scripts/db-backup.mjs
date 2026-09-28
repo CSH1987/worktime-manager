@@ -6,11 +6,11 @@
 // ============================================================
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { TABLES, clientFromEnv } from "./db-common.mjs";
+import { TABLES, connect } from "./db-common.mjs";
 
 const PAGE = 1000; // Supabase API 기본 최대 행 수
 
-const { url, sb } = clientFromEnv();
+const { url, sb, loginMode } = await connect();
 
 const tables = {};
 for (const table of TABLES) {
@@ -30,6 +30,14 @@ for (const table of TABLES) {
   }
   tables[table] = rows;
   console.log(`${table.padEnd(22)} ${rows.length}행`);
+}
+
+if (Object.values(tables).every((rows) => rows.length === 0)) {
+  console.warn(
+    loginMode
+      ? "\n⚠️  모든 테이블이 비어 있습니다. 정말 빈 DB 인지 확인하세요."
+      : "\n⚠️  모든 테이블이 비어 있습니다. DB가 로그인 모드라면 .env.local 에 NEXT_PUBLIC_REQUIRE_LOGIN=1 을 넣고 다시 실행하세요.",
+  );
 }
 
 const stamp = new Date()

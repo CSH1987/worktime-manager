@@ -5,7 +5,7 @@
 //  schema.sql 만 실행한 새 DB 에 복원하는 것을 권장합니다.
 // ============================================================
 import { readFileSync } from "node:fs";
-import { TABLES, clientFromEnv } from "./db-common.mjs";
+import { TABLES, connect } from "./db-common.mjs";
 
 const CHUNK = 500;
 
@@ -20,7 +20,7 @@ if (!backup.tables) {
   process.exit(1);
 }
 
-const { url, sb } = clientFromEnv();
+const { url, sb } = await connect();
 console.log(`복원 대상: ${new URL(url).host}  (백업 원본: ${backup.source ?? "?"}, ${backup.exportedAt ?? "?"})\n`);
 
 for (const table of TABLES) {

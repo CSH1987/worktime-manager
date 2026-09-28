@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useView } from "./ViewProvider";
+import { useStore } from "../lib/store";
 import type { ViewMode } from "../lib/types";
 
 const VIEWS: ViewMode[] = ["근태", "잔업", "통합"];
@@ -15,6 +16,7 @@ const NAV = [
 export default function Header() {
   const pathname = usePathname();
   const { view, setView } = useView();
+  const { loginMode, user, signOut } = useStore();
   const isDashboard = pathname === "/";
 
   return (
@@ -71,6 +73,15 @@ export default function Header() {
               </Link>
             );
           })}
+          {loginMode && user && (
+            <button
+              onClick={() => signOut()}
+              title={`${user} 로그아웃`}
+              className="rounded-full px-3 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 sm:px-3.5"
+            >
+              로그아웃
+            </button>
+          )}
         </nav>
       </div>
     </header>

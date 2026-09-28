@@ -11,3 +11,9 @@ export const supabase: SupabaseClient | null =
   url && anonKey ? createClient(url, anonKey) : null;
 
 export const isConfigured = Boolean(supabase);
+
+/**
+ * 로그인 모드 — NEXT_PUBLIC_REQUIRE_LOGIN=1 이면 로그인한 사람만 사용.
+ * DB 쪽도 supabase/login-mode.sql 로 익명 접근을 막아야 실제로 보호된다.
+ */
+export const requireLogin = process.env.NEXT_PUBLIC_REQUIRE_LOGIN === "1";
