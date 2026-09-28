@@ -1,9 +1,11 @@
 -- ============================================================
---  근태·잔업 통합 관리 — Supabase 스키마 v2 (공유 보드 / 로그인 없음)
+--  근태·잔업 통합 관리 — Supabase 스키마 v2 (공유 보드 / 공개 모드)
 --  원본(sms-ten-pi) 데이터 모델과 동일:
 --    members / absences / overtime_availability / overtime_assignments
 --    / equipment / equipment_unavailable
---  실행: Supabase 대시보드 → SQL Editor → 전체 붙여넣고 Run (idempotent)
+--  실행: Supabase 대시보드 → SQL Editor → 전체 붙여넣고 Run
+--  여러 번 실행해도 안전: 기존 데이터는 그대로 두고 표·권한만 맞춘다.
+--  (로그인 모드였다면 공개 모드로 되돌아감. 예시 팀원·설비는 표가 비어 있을 때만 넣음)
 --
 --  ⚠️ 기존 v1 보드를 업그레이드하는 경우엔 이 파일이 아니라
 --     supabase/migrate.sql 을 실행하세요(기존 데이터 보존).
@@ -66,14 +68,21 @@ create table if not exists public.equipment_unavailable (
 );
 
 -- ---------- 2. 권한 + RLS (공유 보드: 익명 포함 누구나 읽기/쓰기) ----------
---  GRANT 는 Supabase 기본값에 기대지 않도록 명시 (새 프로젝트/자체 호스팅 대비)
+alter table public.members               enable row level security;
+alter table public.absences              enable row level security;
+alter table public.overtime_availability enable row level security;
+alter table public.overtime_assignments  enable row level security;
+alter table public.equipment             enable row level security;
+alter table public.equipment_unavailable enable row level security;
+
+--  GRANT 는 명시 — 새 Supabase 프로젝트는 새 표를 자동 공개하지 않는다
 do $$
 declare t text;
 begin
   foreach t in array array['members','absences','overtime_availability','overtime_assignments','equipment','equipment_unavailable']
   loop
     execute format('grant select, insert, update, delete on public.%I to anon, authenticated;', t);
-    execute format('alter table public.%I enable row level security;', t);
+    execute format('drop policy if exists "team_all" on public.%I;', t);   -- 로그인 모드 정책 정리
     execute format('drop policy if exists "public_all" on public.%I;', t);
     execute format(
       'create policy "public_all" on public.%I for all to anon, authenticated using (true) with check (true);',
@@ -95,17 +104,22 @@ begin
   end loop;
 end $$;
 
--- ---------- 4. 시드 (팀원 + 설비 마스터) — 신규 설치용 ----------
-insert into public.members (id, name, color, active, sort) values
+-- ---------- 4. 시드 (예시 팀원 + 설비 마스터) — 표가 비어 있을 때만 ----------
+--  다시 실행해도 팀이 지운 예시가 되살아나지 않게, 한 줄이라도 있으면 건너뜀
+insert into public.members (id, name, color, active, sort)
+select * from (values
   ('seungri', '승리', '#16A085', true, 0),
   ('eunbi',   '은비', '#1428A0', true, 1),
   ('jaei',    '재이', '#E74C3C', true, 2),
   ('yujeong', '유정', '#FF6B4A', true, 3),
   ('hyeri',   '혜리', '#F39C12', true, 4),
   ('hanbyeol','한별', '#8E44AD', true, 5)
+) as v(id, name, color, active, sort)
+where not exists (select 1 from public.members)
 on conflict (id) do nothing;
 
-insert into public.equipment (id, name, category, sort) values
+insert into public.equipment (id, name, category, sort)
+select * from (values
   ('e-align2','ALIGN2','ALIGNER',0),
   ('e-align6','ALIGN6','ALIGNER',1),
   ('e-etche7a','ETCHE7_A',null,2),
@@ -144,4 +158,6 @@ insert into public.equipment (id, name, category, sort) values
   ('e-stepp2','STEPP2','STEPPER',35),
   ('e-track10','TRACK10','TRACK',36),
   ('e-track9','TRACK9','TRACK',37)
+) as v(id, name, category, sort)
+where not exists (select 1 from public.equipment)
 on conflict (id) do nothing;

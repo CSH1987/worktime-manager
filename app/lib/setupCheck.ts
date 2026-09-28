@@ -1,3 +1,5 @@
+import { supabaseKey, supabaseUrl } from "./supabase";
+
 /**
  * 로그인 모드 보안 점검 — 설치하는 사람이 놓치기 쉬운 두 가지를 확인한다.
  *  1) 회원가입이 열려 있으면 누구나 계정을 만들어 들어올 수 있다
@@ -5,12 +7,13 @@
  * 둘 다 브라우저에 공개된 키로 확인 가능한 정보만 조회한다.
  */
 export async function checkLoginModeSecurity(): Promise<string[]> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, "");
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) return [];
+  const url = supabaseUrl.replace(/\/+$/, "");
+  if (!url || !supabaseKey) return [];
 
-  // 세션 없이 공개 키로만 요청 = "로그인 안 한 사람" 이 보는 결과
-  const headers = { apikey: key, Authorization: `Bearer ${key}` };
+  // 세션 없이 공개 키로만 요청 = "로그인 안 한 사람" 이 보는 결과.
+  // sb_publishable_ 키는 apikey 헤더로만 보내야 하고, 예전 anon(JWT) 키는 Bearer 도 함께 보낸다.
+  const headers: Record<string, string> = { apikey: supabaseKey };
+  if (supabaseKey.startsWith("eyJ")) headers.Authorization = `Bearer ${supabaseKey}`;
   const getJson = (path: string) =>
     fetch(`${url}${path}`, { headers }).then((r) => (r.ok ? r.json() : null));
 

@@ -23,6 +23,11 @@ for (const table of TABLES) {
       .range(from, from + PAGE - 1);
     if (error) {
       console.error(`[${table}] 읽기 실패: ${error.message}`);
+      if (!loginMode && (error.code === "42501" || /permission denied/i.test(error.message))) {
+        console.error(
+          "DB가 로그인 모드라면 .env.local 에 NEXT_PUBLIC_REQUIRE_LOGIN=1 을 넣고 다시 실행하세요.",
+        );
+      }
       process.exit(1);
     }
     rows.push(...data);
@@ -33,24 +38,19 @@ for (const table of TABLES) {
 }
 
 if (Object.values(tables).every((rows) => rows.length === 0)) {
-  console.warn(
-    loginMode
-      ? "\n⚠️  모든 테이블이 비어 있습니다. 정말 빈 DB 인지 확인하세요."
-      : "\n⚠️  모든 테이블이 비어 있습니다. DB가 로그인 모드라면 .env.local 에 NEXT_PUBLIC_REQUIRE_LOGIN=1 을 넣고 다시 실행하세요.",
-  );
+  console.warn("\n⚠️  모든 테이블이 비어 있습니다. 연결한 프로젝트가 맞는지 확인하세요.");
 }
 
-const stamp = new Date()
-  .toISOString()
-  .replace(/[-:]/g, "")
-  .replace("T", "-")
-  .slice(0, 15);
+// 파일 이름은 이 PC 의 현지 시각 (한국이면 KST)
+const d = new Date();
+const p2 = (n) => String(n).padStart(2, "0");
+const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
 const out = process.argv[2] ?? `backups/worktime-${stamp}.json`;
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(
   out,
   JSON.stringify(
-    { version: 1, exportedAt: new Date().toISOString(), source: new URL(url).host, tables },
+    { version: 1, exportedAt: d.toISOString(), source: new URL(url).host, tables },
     null,
     2,
   ),

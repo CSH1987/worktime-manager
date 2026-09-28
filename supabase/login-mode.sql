@@ -1,13 +1,15 @@
 -- ============================================================
 --  로그인 모드 — 로그인한 사람(authenticated)만 읽기/쓰기, 익명(anon) 차단
 --  실행 순서: schema.sql 먼저 → 그다음 이 파일 (SQL Editor 에서 Run)
---  여러 번 실행해도 안전(idempotent).
+--  여러 번 실행해도 안전. 데이터는 건드리지 않고 권한만 바꾼다.
+--  Run 을 누르면 정책 삭제(drop policy) 때문에 'Potential issue(s)' 확인 창이
+--  뜰 수 있습니다 — 의도한 동작이니 Run query 를 누르세요.
 --
 --  함께 해야 하는 것 (docs/SETUP.md 참고):
---   1) Vercel 환경변수 NEXT_PUBLIC_REQUIRE_LOGIN=1 → 다시 배포
---   2) Authentication → Sign In / Providers → 'Allow new users to sign up' 끄기
+--   1) Authentication → Sign In / Providers → 'Allow new users to sign up' 끄기
 --      (켜 두면 공개 키로 누구나 가입해 로그인할 수 있음)
---   3) Authentication → Users → Add user 로 팀 계정 만들기
+--   2) Authentication → Users → Add user 로 팀 계정 만들기
+--   3) Vercel 환경변수 NEXT_PUBLIC_REQUIRE_LOGIN=1 → 다시 배포
 --
 --  공개 모드로 되돌리기: schema.sql 을 다시 실행하고
 --  NEXT_PUBLIC_REQUIRE_LOGIN 을 지운 뒤 다시 배포.

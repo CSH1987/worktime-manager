@@ -2,7 +2,6 @@
 
 import { useSyncExternalStore } from "react";
 import { requireLogin, supabase } from "./supabase";
-import { buildMockData } from "./mock";
 import type {
   AbsenceType,
   AppData,
@@ -20,9 +19,9 @@ import type {
 
 export type Status = "unconfigured" | "signedOut" | "loading" | "ready" | "error";
 
-/** 화면 상단에 알릴 문제 — load: 불러오기 실패(화면 사용 불가), save: 저장 실패 */
+/** 화면 상단에 알릴 문제 — load: 불러오기 실패(화면 사용 불가), action: 저장·로그아웃 등 실패 */
 export interface Problem {
-  kind: "load" | "save";
+  kind: "load" | "action";
   message: string;
 }
 
@@ -115,10 +114,14 @@ interface Backend {
 
 /* ---------- mock 백엔드 (인메모리) ---------- */
 function mockBackend(): Backend {
-  let data = buildMockData();
+  let data: AppData | null = null;
   return {
     async load() {
-      return clone(data);
+      // 조건을 빌드 상수로 직접 써야 운영 빌드에서 import 자체가 빠진다 (next.config.ts env)
+      if (!data && process.env.NEXT_PUBLIC_USE_MOCK === "1") {
+        data = (await import("./mock")).buildMockData();
+      }
+      return clone(data ?? EMPTY);
     },
     watch() {
       return () => {};
@@ -130,42 +133,99 @@ function mockBackend(): Backend {
 }
 
 /* ---------- Supabase 백엔드 ---------- */
+const PAGE = 1000; // Supabase API 한 번 응답 최대 행 수(기본값)
+let channelSeq = 0;
+
 function supabaseBackend(sb: NonNullable<typeof supabase>): Backend {
+  /** 한 번에 1000행까지만 오므로 끝까지 나눠 받는다 (넘는 행이 조용히 빠지지 않게) */
+  async function selectAll(table: string, order: string[]): Promise<Row[]> {
+    const rows: Row[] = [];
+    let total: number | null = null;
+    for (let from = 0; ; from += PAGE) {
+      let q = sb.from(table).select("*", from === 0 ? { count: "exact" } : undefined);
+      for (const col of [...order, "id"]) q = q.order(col);
+      const { data, error, count } = await q.range(from, from + PAGE - 1);
+      if (error) throw error; // code(PGRST205 등) 를 살려 배너에서 원인 안내
+      if (from === 0) total = count;
+      rows.push(...((data ?? []) as Row[]));
+      const done = total !== null ? rows.length >= total : (data ?? []).length < PAGE;
+      if (done || !data?.length) return rows;
+    }
+  }
+
   return {
     async load() {
       const [members, absences, avail, assign, equip, unavail] =
         await Promise.all([
-          sb.from("members").select("*").order("sort"),
-          sb.from("absences").select("*"),
-          sb.from("overtime_availability").select("*"),
-          sb.from("overtime_assignments").select("*"),
-          sb.from("equipment").select("*").order("sort"),
-          sb.from("equipment_unavailable").select("*").order("start_date"),
+          selectAll("members", ["sort"]),
+          selectAll("absences", []),
+          selectAll("overtime_availability", []),
+          selectAll("overtime_assignments", []),
+          selectAll("equipment", ["sort"]),
+          selectAll("equipment_unavailable", ["start_date"]),
         ]);
-      const err =
-        members.error ||
-        absences.error ||
-        avail.error ||
-        assign.error ||
-        equip.error ||
-        unavail.error;
-      if (err) throw err; // code(PGRST205 등) 를 살려 배너에서 원인 안내
       return {
-        members: (members.data ?? []).map(toMember),
-        absences: (absences.data ?? []).map(toAbsence),
-        availability: (avail.data ?? []).map(toAvail),
-        assignments: (assign.data ?? []).map(toAssign),
-        equipment: (equip.data ?? []).map(toEquip),
-        unavailable: (unavail.data ?? []).map(toUnavail),
+        members: members.map(toMember),
+        absences: absences.map(toAbsence),
+        availability: avail.map(toAvail),
+        assignments: assign.map(toAssign),
+        equipment: equip.map(toEquip),
+        unavailable: unavail.map(toUnavail),
       };
     },
+    /**
+     * 실시간 구독 — 연결이 끊겼다 다시 붙거나(절전·와이파이 변경·24시간 제한·토큰 만료)
+     * 탭으로 돌아오면 그사이 바뀐 내용을 다시 불러온다. 채널이 죽으면 새로 연결.
+     */
     watch(cb) {
-      const ch = sb
-        .channel("kuntae-realtime")
-        .on("postgres_changes", { event: "*", schema: "public" }, () => cb())
-        .subscribe();
+      let stopped = false;
+      let retry: ReturnType<typeof setTimeout> | undefined;
+      let current: { ch: ReturnType<typeof sb.channel>; dead: boolean } | null = null;
+
+      const open = () => {
+        // 채널 이름이 같으면 닫히는 중인 옛 채널이 재사용되므로 매번 새 이름
+        const entry = {
+          ch: sb.channel(`kuntae-realtime-${++channelSeq}`),
+          dead: false,
+        };
+        current = entry;
+        entry.ch
+          .on("postgres_changes", { event: "*", schema: "public" }, () => cb())
+          .subscribe((status) => {
+            if (stopped || entry.dead) return;
+            if (status === "SUBSCRIBED") {
+              cb(); // 첫 연결·재연결 모두: 끊겨 있던 사이 변경분 반영
+            } else if (
+              status === "CHANNEL_ERROR" ||
+              status === "TIMED_OUT" ||
+              status === "CLOSED"
+            ) {
+              entry.dead = true;
+              sb.removeChannel(entry.ch);
+              retry = setTimeout(() => {
+                if (!stopped) open();
+              }, 3000);
+            }
+          });
+      };
+
+      const onVisible = () => {
+        if (document.visibilityState === "visible") cb();
+      };
+      const onOnline = () => cb();
+      open();
+      document.addEventListener("visibilitychange", onVisible);
+      window.addEventListener("online", onOnline);
+
       return () => {
-        sb.removeChannel(ch);
+        stopped = true;
+        clearTimeout(retry);
+        document.removeEventListener("visibilitychange", onVisible);
+        window.removeEventListener("online", onOnline);
+        if (current && !current.dead) {
+          current.dead = true;
+          sb.removeChannel(current.ch);
+        }
       };
     },
     async persist(op) {
@@ -251,8 +311,19 @@ function setData(d: AppData) {
   publish();
 }
 
+/** 연결·키 문제 — 로그인/불러오기/저장 어디서 나든 같은 안내 */
+function describeConnectionError(msg: string): string | null {
+  if (/invalid api key|no api key|jwt/i.test(msg)) {
+    return "Supabase 공개 키가 올바르지 않습니다. NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY 값을 확인하고 다시 배포하세요.";
+  }
+  if (/failed to fetch|networkerror|fetch failed|load failed/i.test(msg)) {
+    return "Supabase 에 연결하지 못했습니다. 인터넷 연결, NEXT_PUBLIC_SUPABASE_URL 값, 프로젝트 일시정지 여부를 확인하세요.";
+  }
+  return null;
+}
+
 /** DB 오류를 설치하는 사람이 바로 조치할 수 있는 문장으로 바꾼다 */
-function describeDbError(e: unknown, action: Problem["kind"]): string {
+function describeDbError(e: unknown, action: "load" | "save"): string {
   const err = (e ?? {}) as { code?: string; message?: string };
   const msg = err.message ?? String(e);
   if (
@@ -267,12 +338,8 @@ function describeDbError(e: unknown, action: Problem["kind"]): string {
       ? "DB 권한이 없습니다. 로그인 상태와 supabase/login-mode.sql 실행 여부를 확인하세요."
       : "DB 권한이 없습니다. DB를 로그인 전용(login-mode.sql)으로 바꿨다면 NEXT_PUBLIC_REQUIRE_LOGIN=1 로 다시 배포하세요.";
   }
-  if (/invalid api key|no api key|jwt/i.test(msg)) {
-    return "Supabase 키가 올바르지 않습니다. NEXT_PUBLIC_SUPABASE_ANON_KEY 값을 확인하세요.";
-  }
-  if (/failed to fetch|networkerror|fetch failed|load failed/i.test(msg)) {
-    return "Supabase 에 연결하지 못했습니다. 인터넷 연결과 NEXT_PUBLIC_SUPABASE_URL 값을 확인하세요.";
-  }
+  const conn = describeConnectionError(msg);
+  if (conn) return conn;
   return `${action === "load" ? "데이터를 불러오지 못했습니다" : "저장하지 못했습니다"}: ${msg}`;
 }
 
@@ -280,6 +347,13 @@ function describeDbError(e: unknown, action: Problem["kind"]): string {
 let running = false;
 let unwatch: (() => void) | null = null;
 let loadSeq = 0; // 가장 최근 요청 결과만 반영 (늦게 도착한 옛 응답·로그아웃 후 응답 무시)
+let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** 실시간 이벤트가 몰려도(기간 일괄 등록 등) 잠깐 모아서 한 번만 다시 불러온다 */
+function scheduleReload() {
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => loadAll(), 300);
+}
 
 async function loadAll() {
   if (!backend || !running) return;
@@ -304,11 +378,12 @@ function startData() {
   if (running || !backend) return;
   running = true;
   loadAll();
-  unwatch = backend.watch(() => loadAll());
+  unwatch = backend.watch(scheduleReload);
 }
 
 function stopData() {
   running = false;
+  clearTimeout(reloadTimer);
   unwatch?.();
   unwatch = null;
   loadSeq++; // 진행 중인 load 결과 폐기
@@ -360,7 +435,7 @@ async function commit(next: AppData, op: Op) {
     await backend.persist(op, next);
   } catch (e) {
     console.error("[store] persist failed:", e);
-    problem = { kind: "save", message: describeDbError(e, "save") };
+    problem = { kind: "action", message: describeDbError(e, "save") };
     publish();
     loadAll();
   }
@@ -381,13 +456,21 @@ async function signIn(email: string, password: string): Promise<string | null> {
   if (error.code === "email_not_confirmed") {
     return "이메일 인증이 끝나지 않은 계정입니다. 관리자에게 계정 확인을 요청하세요.";
   }
-  return `로그인하지 못했습니다: ${error.message}`;
+  return describeConnectionError(error.message) ?? `로그인하지 못했습니다: ${error.message}`;
 }
+/** 이 브라우저만 로그아웃 (공용 계정을 쓰는 다른 팀원은 그대로 유지) */
 async function signOut() {
-  await supabase?.auth.signOut();
+  const res = await supabase?.auth.signOut({ scope: "local" });
+  if (res?.error) {
+    problem = {
+      kind: "action",
+      message: "로그아웃하지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요.",
+    };
+    publish();
+  }
 }
 function dismissProblem() {
-  if (problem?.kind !== "save") return;
+  if (problem?.kind !== "action") return;
   problem = null;
   publish();
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { checkLoginModeSecurity } from "../lib/setupCheck";
 import { useStore } from "../lib/store";
+import { configError } from "../lib/supabase";
 
 /** 연결/로딩/오류/설정 점검 배너 (모든 페이지 상단) */
 export default function StatusBanner() {
@@ -27,10 +28,10 @@ export default function StatusBanner() {
 
   const empty =
     ready && data.members.length === 0 && data.equipment.length === 0;
-  const saveProblem = problem?.kind === "save" ? problem : null;
+  const actionProblem = problem?.kind === "action" ? problem : null;
   const nothing =
     (ready || status === "signedOut") &&
-    !saveProblem &&
+    !actionProblem &&
     !empty &&
     warnings.length === 0;
   if (nothing) return null;
@@ -41,8 +42,13 @@ export default function StatusBanner() {
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           <p className="font-semibold">Supabase가 아직 연결되지 않았습니다.</p>
           <p className="mt-1">
-            환경변수 <code>NEXT_PUBLIC_SUPABASE_URL</code> 과{" "}
-            <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> 를 넣고 다시 배포(빌드)하세요.
+            {configError ?? (
+              <>
+                환경변수 <code>NEXT_PUBLIC_SUPABASE_URL</code> 과{" "}
+                <code>NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY</code> 를 넣고 다시
+                배포(빌드)하세요.
+              </>
+            )}{" "}
             설치 순서는 저장소의 <code>docs/SETUP.md</code> 에 있습니다. (로컬
             미리보기는 <code>NEXT_PUBLIC_USE_MOCK=1</code>)
           </p>
@@ -64,12 +70,12 @@ export default function StatusBanner() {
           불러오는 중…
         </div>
       )}
-      {saveProblem && (
+      {actionProblem && (
         <div
           role="alert"
           className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700"
         >
-          <span>{saveProblem.message}</span>
+          <span>{actionProblem.message}</span>
           <button
             onClick={dismissProblem}
             className="rounded-lg border border-rose-300 bg-white px-3 py-1 font-medium hover:bg-rose-100"
@@ -90,13 +96,6 @@ export default function StatusBanner() {
       {empty && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
           팀원과 설비가 아직 없습니다. 상단 <b>관리</b> 메뉴에서 추가하세요.
-          {!loginMode && (
-            <>
-              {" "}
-              (DB를 로그인 전용으로 바꿨다면 <code>NEXT_PUBLIC_REQUIRE_LOGIN=1</code>{" "}
-              로 다시 배포해야 데이터가 보입니다.)
-            </>
-          )}
         </div>
       )}
     </div>

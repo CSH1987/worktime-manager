@@ -41,4 +41,6 @@ npm run db:restore -- <파일.json>  # 백업 → 현재 DB
 
 ### 주의
 
-- `anon` 키는 공개되어도 되는 키지만, `service_role` 키는 절대 커밋/노출하지 마세요.
+- 공개 키(`sb_publishable_…`, 예전 `anon`)는 브라우저에 노출돼도 되지만, 비밀 키(`sb_secret_…` / `service_role`)는 절대 커밋·노출하지 마세요.
+- 앱은 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` 를 먼저 읽고, 없으면 예전 이름 `NEXT_PUBLIC_SUPABASE_ANON_KEY` 를 씁니다.
+- `app/lib/mock.ts` 의 예시 데이터는 가상 인물이며, `NEXT_PUBLIC_USE_MOCK=1` 일 때만 불러옵니다(운영 번들에 포함되지 않음).

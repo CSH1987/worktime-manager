@@ -16,7 +16,7 @@ export const TABLES = [
   "equipment_unavailable",
 ];
 
-async function ask(question) {
+export async function ask(question) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await rl.question(question);
   rl.close();
@@ -38,6 +38,7 @@ function askHidden(question) {
       resolve(buf);
     };
     const onData = (chunk) => {
+      if (chunk.startsWith("\u001b")) return; // 방향키·Delete 등 특수키는 무시
       for (const c of chunk) {
         if (c === "\r" || c === "\n") return finish();
         if (c === "\u0003") {
@@ -46,7 +47,7 @@ function askHidden(question) {
           process.exit(130); // Ctrl+C
         }
         if (c === "\u007f" || c === "\b") buf = buf.slice(0, -1);
-        else buf += c;
+        else if (c >= " ") buf += c; // 그 밖의 제어문자는 버림
       }
     };
     stdin.setEncoding("utf8");
@@ -57,16 +58,23 @@ function askHidden(question) {
 }
 
 export async function connect() {
+  if (typeof process.loadEnvFile !== "function") {
+    console.error(`Node.js 22 (최소 20.12) 이상이 필요합니다. 현재 버전: ${process.version}`);
+    process.exit(1);
+  }
   try {
     process.loadEnvFile(".env.local"); // 이미 셸에 있는 값은 덮어쓰지 않음
-  } catch {
-    // .env.local 이 없으면 셸 환경변수만 사용
+  } catch (e) {
+    if (e?.code !== "ENOENT") throw e; // .env.local 이 없으면 셸 환경변수만 사용
   }
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const key = (
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  )?.trim();
   if (!url || !key) {
     console.error(
-      "NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY 가 없습니다. .env.local 을 확인하세요.",
+      "NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY 가 없습니다. .env.local 을 확인하세요.",
     );
     process.exit(1);
   }
@@ -74,7 +82,7 @@ export async function connect() {
 
   const loginMode = process.env.NEXT_PUBLIC_REQUIRE_LOGIN === "1";
   if (loginMode) {
-    // 로그인 모드 DB 는 익명으로 읽으면 빈 결과가 나오므로 반드시 로그인
+    // 로그인 모드 DB 는 익명으로는 권한 오류가 나므로 반드시 로그인
     const email = process.env.WTM_EMAIL || (await ask("팀 계정 이메일: "));
     const password = process.env.WTM_PASSWORD || (await askHidden("비밀번호: "));
     const { error } = await sb.auth.signInWithPassword({ email, password });
