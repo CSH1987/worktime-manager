@@ -65,12 +65,14 @@ create table if not exists public.equipment_unavailable (
   created_at  timestamptz not null default now()
 );
 
--- ---------- 2. RLS (공유 보드: 익명 포함 누구나 읽기/쓰기) ----------
+-- ---------- 2. 권한 + RLS (공유 보드: 익명 포함 누구나 읽기/쓰기) ----------
+--  GRANT 는 Supabase 기본값에 기대지 않도록 명시 (새 프로젝트/자체 호스팅 대비)
 do $$
 declare t text;
 begin
   foreach t in array array['members','absences','overtime_availability','overtime_assignments','equipment','equipment_unavailable']
   loop
+    execute format('grant select, insert, update, delete on public.%I to anon, authenticated;', t);
     execute format('alter table public.%I enable row level security;', t);
     execute format('drop policy if exists "public_all" on public.%I;', t);
     execute format(

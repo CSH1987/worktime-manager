@@ -10,6 +10,8 @@ SAMSUNG 근태·잔업 관리 웹앱 클론. **Next.js 16 + TypeScript + Tailwin
 
 데이터는 **Supabase(Postgres)에 팀이 공유**하며, 한 명이 등록하면 **실시간**으로 다른 사람 화면에도 반영됩니다. (로그인 없는 공유 보드 — URL을 아는 사람은 누구나 보고 편집)
 
+> **Supabase/Vercel 프로젝트를 새로 만들거나 다른 계정으로 옮기는 경우** → [`docs/RECOVERY.md`](docs/RECOVERY.md) (재구축 절차 + 데이터 백업/복원 `npm run db:backup` / `db:restore`)
+
 ---
 
 ## 팀 공유 설정 — 3단계
