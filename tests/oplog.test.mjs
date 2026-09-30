@@ -111,3 +111,21 @@ test("버전은 변경이 생길 때만 바뀐다", async () => {
   assert.equal(await log.version(), r2.version);
 });
 
+
+test("늦게 목록에 나타난 (키가 더 이른) 변경도 버전을 바꾼다", async () => {
+  let t = 1_000_000;
+  const kv = fakeKV({ clock: () => t });
+  const log = createOpLog(kv, () => t);
+  // B 는 먼저 만들어졌지만(키가 이름) 목록에 늦게 보이는 상황을 직접 만든다
+  const early = "ops/" + String(t).padStart(15, "0") + "-early";
+  await log.append(uniqueAvail(1));
+  t += 10;
+  await log.append(uniqueAvail(2));
+  const seen = await log.version();
+  await kv.setJSON(early, uniqueAvail(3));
+  const after = await log.version();
+  assert.notEqual(after, seen, "버전이 바뀌어야 다른 화면이 새로 받는다");
+  const s = await log.read();
+  assert.equal(s.version, after, "read 와 version 은 같은 규칙");
+  assert.ok(s.data.availability.some((a) => a.id === "v3"));
+});

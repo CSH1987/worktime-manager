@@ -43,6 +43,21 @@ export const DELETE_AFTER_MS = 24 * 60 * 60_000;
 /** cutoff 뒤에 쌓인 (접을 수 있는) 변경이 이만큼이면 스냅샷을 새로 만든다 */
 export const COMPACT_MIN_OPS = 20;
 
+/**
+ * 버전 = 지금 보이는 변경 키 전체의 지문.
+ * "가장 최신 키"만 쓰면, 조금 늦게 목록에 나타난 (키가 더 이른) 변경이
+ * 버전을 바꾸지 못해 다른 사람 화면이 그 변경을 놓친다.
+ */
+function versionOf(keys: string[], cutoff: string): string {
+  if (!keys.length) return cutoff || "seed";
+  let h = 0x811c9dc5;
+  for (const k of keys) {
+    for (let i = 0; i < k.length; i++) h = Math.imul(h ^ k.charCodeAt(i), 0x01000193);
+    h = Math.imul(h ^ 10, 0x01000193);
+  }
+  return `${keys[keys.length - 1]}~${keys.length}~${(h >>> 0).toString(36)}`;
+}
+
 export const opKey = (ms: number, rand: string) =>
   `${OPS}${String(ms).padStart(15, "0")}-${rand}`;
 const keyMs = (key: string) => Number(key.slice(OPS.length, OPS.length + 15));
@@ -79,22 +94,21 @@ export function createOpLog(kv: KV, now: () => number = Date.now) {
   /** 지금 데이터. extra 는 목록에 아직 안 보이는 내 변경(키 순서대로 끼워 넣음) */
   async function read(extra?: { key: string; op: Op }): Promise<Snapshot> {
     const [base, all] = await Promise.all([loadSnapshot(), kv.listKeys(OPS)]);
-    const keys = all.filter((k) => k > base.cutoff);
-    if (extra && !keys.includes(extra.key) && extra.key > base.cutoff) {
+    if (extra && !all.includes(extra.key)) {
       opCache.set(extra.key, extra.op);
-      keys.push(extra.key);
+      all.push(extra.key);
     }
-    keys.sort();
-    const { data, last } = await fold(base, keys);
-    return { data, version: last || "seed" };
+    all.sort();
+    const { data } = await fold(base, all.filter((k) => k > base.cutoff));
+    return { data, version: versionOf(all, base.cutoff) };
   }
 
-  /** 바뀌었는지만 볼 때 쓰는 가벼운 버전 (목록 1회) */
+  /** 바뀌었는지만 볼 때 쓰는 가벼운 버전 (목록 1회). read() 와 같은 규칙 */
   async function version(): Promise<string> {
-    const keys = await kv.listKeys(OPS);
-    if (keys.length) return keys.sort()[keys.length - 1];
+    const keys = (await kv.listKeys(OPS)).sort();
+    if (keys.length) return versionOf(keys, "");
     const base = await loadSnapshot();
-    return base.cutoff || "seed";
+    return versionOf(keys, base.cutoff);
   }
 
   /** 오래된 변경을 스냅샷으로 접고, 충분히 오래된 것은 지운다 */
