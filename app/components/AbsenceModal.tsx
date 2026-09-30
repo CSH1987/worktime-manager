@@ -198,6 +198,7 @@ export default function AbsenceModal({
             </p>
             <input
               type="text"
+              maxLength={1000}
               value={memo}
               onChange={(e) => setMemo(e.target.value)}
               placeholder="예: 오전 반차"

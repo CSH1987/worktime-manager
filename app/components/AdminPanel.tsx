@@ -138,6 +138,7 @@ export default function AdminPanel({
               이름
             </label>
             <input
+              maxLength={50}
               value={memberName}
               onChange={(e) => setMemberName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addMember()}
@@ -197,6 +198,7 @@ export default function AdminPanel({
               설비명
             </label>
             <input
+              maxLength={80}
               value={equipName}
               onChange={(e) => setEquipName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addEquipment()}
@@ -207,6 +209,7 @@ export default function AdminPanel({
               분류 (선택)
             </label>
             <input
+              maxLength={80}
               value={equipCategory}
               onChange={(e) => setEquipCategory(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addEquipment()}

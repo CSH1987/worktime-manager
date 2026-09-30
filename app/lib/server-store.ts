@@ -44,7 +44,10 @@ function blobsDriver(): Driver {
       const res = expected
         ? await store.setJSON(KEY, data, { onlyIfMatch: expected })
         : await store.setJSON(KEY, data, { onlyIfNew: true });
-      return res.modified ? (res.etag ?? null) : null;
+      if (!res.modified) return null;
+      if (res.etag) return res.etag;
+      const m = await store.getMetadata(KEY);
+      return m?.etag ?? "unknown";
     },
   };
 }

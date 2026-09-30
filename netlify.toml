@@ -6,3 +6,8 @@
 
 [build.environment]
   NODE_VERSION = "22"
+
+# `netlify dev` 의 로컬 Blobs 흉내 서버는 읽을 때 버전(ETag)을 주지 않아
+# 조건부 쓰기가 동작하지 않는다 → 로컬 실행은 파일 저장소를 쓴다.
+[context.dev.environment]
+  WORKTIME_STORE = "file"

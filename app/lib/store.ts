@@ -102,14 +102,18 @@ function publish() {
 
 /** 아직 서버에 도착하지 않은 내 변경 수. 0 이 아니면 서버 값으로 덮어쓰지 않는다. */
 let pending = 0;
+/** 내 저장이 끝날 때마다 +1. 그 전에 출발한 불러오기 결과는 낡았으므로 버린다. */
+let writeEpoch = 0;
 let loading: Promise<void> | null = null;
 
 function loadAll(force = false): Promise<void> {
-  if (loading) return loading;
+  // 강제 불러오기는 진행 중인(비교용) 불러오기 뒤에 이어 붙인다
+  if (loading) return force ? loading.then(() => loadAll(true)) : loading;
+  const epoch = writeEpoch;
   loading = (async () => {
     try {
       const snap = await backend.load(force ? null : version);
-      if (snap && pending === 0) {
+      if (snap && pending === 0 && epoch === writeEpoch) {
         currentData = snap.data;
         version = snap.version;
       }
@@ -154,6 +158,13 @@ function subscribe(cb: () => void) {
 /** 변경은 보낸 순서대로 하나씩 서버에 반영 */
 let sendQueue: Promise<void> = Promise.resolve();
 
+/** 색상 피커를 끌면 변경이 연달아 생긴다 — 대기열에서 더 새 값이 있는 옛 값은 보내지 않는다 */
+const latestColorOp = new Map<string, Op>();
+const superseded = (op: Op) =>
+  op.kind === "member.update" &&
+  op.patch.color !== undefined &&
+  latestColorOp.get(op.id) !== op;
+
 /** 낙관적 업데이트: 화면 먼저 → 서버 반영 → 실패하면 서버 값으로 되돌림 */
 function commit(op: Op): Promise<void> {
   const next = applyOp(currentData, op);
@@ -161,10 +172,18 @@ function commit(op: Op): Promise<void> {
   currentData = next;
   publish();
   pending++;
+  if (op.kind === "member.update" && op.patch.color !== undefined) {
+    latestColorOp.set(op.id, op);
+  }
   const run = sendQueue.then(async () => {
+    if (superseded(op)) {
+      pending--;
+      return;
+    }
     try {
       const snap = await backend.persist(op);
       pending--;
+      writeEpoch++;
       if (pending === 0) {
         currentData = snap.data;
         version = snap.version;
@@ -172,6 +191,8 @@ function commit(op: Op): Promise<void> {
       }
     } catch (e) {
       pending--;
+      writeEpoch++;
+      version = null; // 다음 불러오기는 무조건 전체를 받아 화면을 서버 값으로 되돌린다
       console.error("[store] persist failed:", e);
       if (pending === 0) await loadAll(true);
     }

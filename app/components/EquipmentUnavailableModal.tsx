@@ -137,6 +137,7 @@ export default function EquipmentUnavailableModal({
               사유 (선택)
             </label>
             <input
+              maxLength={500}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="예: 점검중 / 고장"
@@ -150,6 +151,7 @@ export default function EquipmentUnavailableModal({
               등록자 (선택)
             </label>
             <input
+              maxLength={50}
               value={reportedBy}
               onChange={(e) => setReportedBy(e.target.value)}
               className={field}
