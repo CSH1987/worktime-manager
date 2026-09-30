@@ -56,7 +56,7 @@ export const DELETE_AFTER_MS = 24 * 60 * 60_000;
  */
 export const DELETE_GRACE_MS = 60 * 60_000;
 /** 이 서버가 방금 쓴 변경은 목록에 늦게 보여도(실측 0.5~2.5초) 읽기에 합친다 */
-export const RECENT_WRITE_MS = 15_000;
+const RECENT_WRITE_MS = 15_000;
 /** cutoff 뒤에 쌓인 (접을 수 있는) 변경이 이만큼이면 스냅샷을 새로 만든다 */
 export const COMPACT_MIN_OPS = 20;
 
@@ -75,7 +75,7 @@ function versionOf(keys: string[], cutoff: string): string {
   return `${keys[keys.length - 1]}~${keys.length}~${(h >>> 0).toString(36)}`;
 }
 
-export const opKey = (ms: number, rand: string) =>
+const opKey = (ms: number, rand: string) =>
   `${OPS}${String(ms).padStart(15, "0")}-${rand}`;
 const keyMs = (key: string) => Number(key.slice(OPS.length, OPS.length + 15));
 
