@@ -164,3 +164,19 @@ test("늦게 목록에 나타난 (키가 더 이른) 변경도 버전을 바꾼�
   assert.equal(s.version, after, "read 와 version 은 같은 규칙");
   assert.ok(s.data.availability.some((a) => a.id === "v3"));
 });
+
+test("최근 60초 안 변경이 잠깐 안 읽혀도 읽기 전체가 실패하지 않는다(접기는 여전히 엄격)", async () => {
+  let t = 1_000_000;
+  const kv = fakeKV({ clock: () => t });
+  const log = createOpLog(kv, () => t);
+  for (let i = 0; i < 3; i++) { await log.append(uniqueAvail(i)); t += 10; }
+  const newest = [...kv.m.keys()].filter((k) => k.startsWith("ops/")).sort().at(-1);
+  const realGet = kv.getJSON;
+  kv.getJSON = async (k) => (k === newest ? null : realGet(k));
+  const cold = createOpLog(kv, () => t);
+  const r = await cold.read();
+  assert.equal(r.data.availability.length, 2, "읽히는 것만으로 응답");
+  t += COMPACT_LAG_MS + 1000; // 60초가 지나면 더는 봐주지 않는다
+  await assert.rejects(createOpLog(kv, () => t).read(), MissingOpError);
+  kv.getJSON = realGet;
+});

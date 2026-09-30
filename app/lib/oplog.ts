@@ -98,12 +98,19 @@ export function createOpLog(kv: KV, now: () => number = Date.now) {
     return s ?? { data: buildSeedData(), cutoff: "" };
   }
 
-  async function fold(base: StoredSnapshot, keys: string[]) {
+  /**
+   * skipRecentMissing: 목록엔 보이는데 아직 읽히지 않는 "최근 60초 안" 변경은 건너뛴다.
+   * 그런 변경은 아직 접기 대상이 아니라 유실 경로가 아니고, 다음 새로고침에 반영된다.
+   * (접기는 이 옵션 없이 엄격하게 — 빠진 채 스냅샷을 쓰면 영구 유실)
+   */
+  async function fold(base: StoredSnapshot, keys: string[], skipRecentMissing = false) {
     const ops = await Promise.all(keys.map(getOp));
+    const recentLimit = now() - COMPACT_LAG_MS;
     let data = base.data;
     let last = base.cutoff;
     keys.forEach((k, i) => {
       const op = ops[i];
+      if (!op && skipRecentMissing && keyMs(k) >= recentLimit) return;
       if (!op) throw new MissingOpError(k);
       data = applyOp(data, op);
       last = k;
@@ -123,9 +130,9 @@ export function createOpLog(kv: KV, now: () => number = Date.now) {
     return all.sort();
   }
 
-  async function readOnce(): Promise<Snapshot> {
+  async function readOnce(lenient: boolean): Promise<Snapshot> {
     const [base, all] = await Promise.all([loadSnapshot(), listWithRecent()]);
-    const { data } = await fold(base, all.filter((k) => k > base.cutoff));
+    const { data } = await fold(base, all.filter((k) => k > base.cutoff), lenient);
     return { data, version: versionOf(all, base.cutoff) };
   }
 
@@ -133,7 +140,8 @@ export function createOpLog(kv: KV, now: () => number = Date.now) {
   async function read(): Promise<Snapshot> {
     for (let i = 0; ; i++) {
       try {
-        return await readOnce();
+        // 마지막 시도에서만 최근 변경의 일시적 읽기 실패를 허용한다
+        return await readOnce(i === 3);
       } catch (e) {
         if (!(e instanceof MissingOpError) || i >= 3) throw e;
       }
