@@ -9,7 +9,7 @@ import type { AbsenceType, AppData, Member, OvertimeMethod } from "./types";
  *  Store — 낙관적 로컬 업데이트 + 얇은 백엔드(서버 API | mock)
  *  스토어는 Op 를 만들어 applyOp 로 화면을 먼저 바꾸고,
  *  백엔드에 같은 Op 를 보낸다. 서버도 같은 applyOp 로 반영한다.
- *    - api: /api/data (Netlify Blobs). 5초마다 + 탭 복귀 시 새로고침
+ *    - api: /api/data (Netlify Blobs). 20초마다(화면이 보일 때) + 탭 복귀 시 새로고침
  *    - mock: 인메모리 (NEXT_PUBLIC_USE_MOCK=1, 로컬 미리보기용)
  * ========================================================== */
 
@@ -24,7 +24,8 @@ const EMPTY: AppData = {
   unavailable: [],
 };
 
-const POLL_MS = 5000;
+/** 화면이 보일 때만 이 간격으로 새로고침(탭으로 돌아오면 즉시). 무료 요금제 한도를 고려한 값 */
+const POLL_MS = 20_000;
 
 let idCounter = 0;
 const newId = () =>
@@ -91,12 +92,18 @@ const backend: Backend =
 let currentData: AppData = EMPTY;
 let version: string | null = null;
 let status: Status = "loading";
-let snapshot: { data: AppData; status: Status } = { data: EMPTY, status };
-const SERVER_SNAPSHOT = { data: EMPTY, status: "loading" as Status };
+/** 마지막 저장 실패 안내 (몇 초 뒤 자동으로 사라짐) */
+let saveError: string | null = null;
+let snapshot: { data: AppData; status: Status; saveError: string | null } = {
+  data: EMPTY,
+  status,
+  saveError,
+};
+const SERVER_SNAPSHOT = { data: EMPTY, status: "loading" as Status, saveError: null };
 const listeners = new Set<() => void>();
 
 function publish() {
-  snapshot = { data: currentData, status };
+  snapshot = { data: currentData, status, saveError };
   listeners.forEach((l) => l());
 }
 
@@ -113,12 +120,15 @@ function loadAll(force = false): Promise<void> {
   loading = (async () => {
     try {
       const snap = await backend.load(force ? null : version);
+      const wasReady = status === "ready";
+      status = "ready";
       if (snap && pending === 0 && epoch === writeEpoch) {
         currentData = snap.data;
         version = snap.version;
+        publish();
+      } else if (!wasReady) {
+        publish();
       }
-      status = "ready";
-      publish();
     } catch (e) {
       console.error("[store] load failed:", e);
       // 처음 불러오기 실패만 화면에 알린다 (이후 새로고침 실패는 다음 주기에 재시도)
@@ -153,6 +163,17 @@ function subscribe(cb: () => void) {
   return () => {
     listeners.delete(cb);
   };
+}
+
+let saveErrorTimer: ReturnType<typeof setTimeout> | undefined;
+function showSaveError() {
+  saveError = "저장하지 못했습니다. 방금 바꾼 내용은 되돌렸어요 — 잠시 후 다시 시도하세요.";
+  publish();
+  clearTimeout(saveErrorTimer);
+  saveErrorTimer = setTimeout(() => {
+    saveError = null;
+    publish();
+  }, 6000);
 }
 
 /** 변경은 보낸 순서대로 하나씩 서버에 반영 */
@@ -194,6 +215,7 @@ function commit(op: Op): Promise<void> {
       writeEpoch++;
       version = null; // 다음 불러오기는 무조건 전체를 받아 화면을 서버 값으로 되돌린다
       console.error("[store] persist failed:", e);
+      showSaveError();
       if (pending === 0) await loadAll(true);
     }
   });
@@ -241,6 +263,11 @@ function addAbsences(specs: AbsenceSpec[]) {
 }
 function removeAbsence(id: string) {
   return commit({ kind: "absence.remove", id });
+}
+/** 선택 구간에 걸친 날만 지움 (구간 밖으로 이어진 부재는 남은 부분을 보존) */
+function clearAbsencesInRange(ids: string[], first: string, last: string) {
+  if (!ids.length) return Promise.resolve();
+  return commit({ kind: "absence.clearRange", ids, first, last });
 }
 
 /* ---------- 잔업 가능(후보) ---------- */
@@ -324,6 +351,7 @@ const api = {
   removeMember,
   addAbsences,
   removeAbsence,
+  clearAbsencesInRange,
   setAvailability,
   addAvailabilities,
   removeAvailabilityForDates,
@@ -342,7 +370,7 @@ export function useStore() {
     () => snapshot,
     () => SERVER_SNAPSHOT,
   );
-  return { data: snap.data, status: snap.status, ...api };
+  return { data: snap.data, status: snap.status, saveError: snap.saveError, ...api };
 }
 
 export type Store = ReturnType<typeof useStore>;

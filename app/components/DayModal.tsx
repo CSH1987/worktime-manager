@@ -28,16 +28,27 @@ export default function DayModal({
   const [agreePick, setAgreePick] = useState("");
   const spinTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !showAbsence) onClose();
+      if (e.key === "Escape" && !showAbsence) onCloseRef.current();
     };
     window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showAbsence]);
+
+  // 추첨 타이머는 창이 닫힐 때만 정리 (새로고침으로 다시 그려져도 추첨은 계속)
+  useEffect(
+    () => () => {
       if (spinTimer.current) clearTimeout(spinTimer.current);
-    };
-  }, [onClose, showAbsence]);
+    },
+    [],
+  );
+  const downOnBackdrop = useRef(false);
 
   const members = store.data.members.filter((m) => m.active);
   const nameOf = (id: string) =>
@@ -82,7 +93,13 @@ export default function DayModal({
     <>
       <div
         className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
-        onClick={onClose}
+        onPointerDown={(e) => {
+          downOnBackdrop.current = e.target === e.currentTarget;
+        }}
+        onClick={(e) => {
+          // 달력 칸을 뗀 직후 따라오는 click 으로 바로 닫히지 않게: 배경에서 누르고 뗀 경우만 닫기
+          if (e.target === e.currentTarget && downOnBackdrop.current) onClose();
+        }}
       >
         <div
           role="dialog"

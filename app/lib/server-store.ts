@@ -1,146 +1,81 @@
 // ============================================================
-//  서버 전용 저장소 — 앱 데이터 전체를 JSON 한 덩어리로 보관.
+//  서버 전용 저장소 연결 — 어디에 저장할지만 정한다(로직은 oplog.ts).
 //    - Netlify 위: Netlify Blobs (가입·키 불필요, 사이트에 딸려 옴)
-//    - 그 밖(next dev / next start): 로컬 파일 .data/worktime.json
-//  쓰기는 "읽은 버전이 그대로일 때만" 저장하고, 그 사이 누가
-//  먼저 고쳤으면 최신본을 다시 읽어 Op 를 재적용한다(유실 없음).
+//    - 그 밖(next dev / next start): 로컬 폴더 .data/worktime/
 // ============================================================
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { getStore } from "@netlify/blobs";
-import { applyOp, type Op } from "./ops";
-import { buildSeedData } from "./seed";
-import type { AppData } from "./types";
+import { createOpLog, type KV } from "./oplog.ts";
 
-export interface Snapshot {
-  data: AppData;
-  version: string;
-}
+/** 저장소 이름. 시험용 임시 배포는 빌드 때 다른 이름을 넣어 운영 데이터와 분리한다 */
+const STORE_NAME = process.env.WORKTIME_BLOB_STORE || "worktime";
 
-interface Driver {
-  name: "netlify-blobs" | "file";
-  read(): Promise<Snapshot | null>;
-  readVersion(): Promise<string | null>;
-  /** expected=null 이면 "아직 없을 때만" 생성. 버전이 달라졌으면 null */
-  write(data: AppData, expected: string | null): Promise<string | null>;
-}
-
-const KEY = "data";
-
-function blobsDriver(): Driver {
-  const store = getStore({ name: "worktime", consistency: "strong" });
+function blobsKV(): KV {
+  // 요청마다 새로 만든다 — Netlify 가 넣어 주는 접속 정보가 요청마다 바뀔 수 있음
+  const store = () => getStore({ name: STORE_NAME, consistency: "strong" });
   return {
-    name: "netlify-blobs",
-    async read() {
-      const r = await store.getWithMetadata(KEY, { type: "json" });
-      if (!r || !r.etag) return null;
-      return { data: r.data as AppData, version: r.etag };
+    getJSON: (key) => store().get(key, { type: "json" }),
+    async setJSON(key, value) {
+      await store().setJSON(key, value);
     },
-    async readVersion() {
-      const m = await store.getMetadata(KEY);
-      return m?.etag ?? null;
-    },
-    async write(data, expected) {
-      const res = expected
-        ? await store.setJSON(KEY, data, { onlyIfMatch: expected })
-        : await store.setJSON(KEY, data, { onlyIfNew: true });
-      if (!res.modified) return null;
-      if (res.etag) return res.etag;
-      const m = await store.getMetadata(KEY);
-      return m?.etag ?? "unknown";
+    delete: (key) => store().delete(key),
+    async listKeys(prefix) {
+      const keys: string[] = [];
+      for await (const page of store().list({ prefix, paginate: true })) {
+        for (const b of page.blobs) keys.push(b.key);
+      }
+      return keys;
     },
   };
 }
 
-function fileDriver(): Driver {
-  const file =
-    process.env.WORKTIME_DATA_FILE ?? path.join(process.cwd(), ".data", "worktime.json");
-  type Disk = { version: number; data: AppData };
-  const load = async (): Promise<Disk | null> => {
-    try {
-      return JSON.parse(await fs.readFile(file, "utf8")) as Disk;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw e;
-    }
-  };
-  // 한 프로세스 안에서 쓰기를 한 줄로 세운다(읽기-비교-쓰기 사이 끼어들기 방지)
-  let queue: Promise<unknown> = Promise.resolve();
+// 로컬 전용 저장소. /*turbopackIgnore*/ 는 이 경로들을 배포 묶음 추적에서 빼기 위한 표시
+function fileKV(): KV {
+  const dir = process.env.WORKTIME_DATA_DIR ?? path.join(/*turbopackIgnore: true*/ process.cwd(), ".data", "worktime");
+  const file = (key: string) => path.join(/*turbopackIgnore: true*/ dir, encodeURIComponent(key));
   return {
-    name: "file",
-    async read() {
-      const d = await load();
-      return d ? { data: d.data, version: String(d.version) } : null;
+    async getJSON(key) {
+      try {
+        return JSON.parse(await fs.readFile(/*turbopackIgnore: true*/ file(key), "utf8"));
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw e;
+      }
     },
-    async readVersion() {
-      const d = await load();
-      return d ? String(d.version) : null;
+    async setJSON(key, value) {
+      await fs.mkdir(/*turbopackIgnore: true*/ dir, { recursive: true });
+      const tmp = `${file(key)}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+      await fs.writeFile(/*turbopackIgnore: true*/ tmp, JSON.stringify(value));
+      await fs.rename(/*turbopackIgnore: true*/ tmp, file(key));
     },
-    write(data, expected) {
-      const run = queue.then(async () => {
-        const cur = await load();
-        const curVersion = cur ? String(cur.version) : null;
-        if (curVersion !== expected) return null;
-        const version = (cur?.version ?? 0) + 1;
-        await fs.mkdir(path.dirname(file), { recursive: true });
-        const tmp = `${file}.${process.pid}.tmp`;
-        await fs.writeFile(tmp, JSON.stringify({ version, data }));
-        await fs.rename(tmp, file);
-        return String(version);
-      });
-      queue = run.catch(() => {});
-      return run;
+    async delete(key) {
+      await fs.rm(/*turbopackIgnore: true*/ file(key), { force: true });
+    },
+    async listKeys(prefix) {
+      const names = await fs.readdir(/*turbopackIgnore: true*/ dir).catch(() => [] as string[]);
+      return names
+        .filter((n) => !n.endsWith(".tmp"))
+        .map(decodeURIComponent)
+        .filter((k) => k.startsWith(prefix));
     },
   };
 }
 
-let driver: Driver | null = null;
-function getDriver(): Driver {
-  if (driver) return driver;
-  if (process.env.WORKTIME_STORE !== "file") {
-    try {
-      driver = blobsDriver();
-      return driver;
-    } catch (e) {
-      // Netlify 밖에서는 Blobs 환경이 없어 여기로 온다
-      if ((e as Error).name !== "MissingBlobsEnvironmentError") throw e;
-    }
+function hasBlobsContext(): boolean {
+  if (process.env.WORKTIME_STORE === "file") return false;
+  try {
+    getStore(STORE_NAME);
+    return true;
+  } catch (e) {
+    // Netlify 밖에서는 Blobs 접속 정보가 없어 여기로 온다
+    if ((e as Error).name === "MissingBlobsEnvironmentError") return false;
+    throw e;
   }
-  driver = fileDriver();
-  return driver;
 }
 
-export const storeKind = () => getDriver().name;
-
-/** 현재 데이터. 저장소가 비어 있으면 시드를 한 번 만든다. */
-export async function readData(): Promise<Snapshot> {
-  const d = getDriver();
-  for (let i = 0; i < 5; i++) {
-    const cur = await d.read();
-    if (cur) return cur;
-    const seed = buildSeedData();
-    const version = await d.write(seed, null);
-    if (version) return { data: seed, version };
-  }
-  throw new Error("저장소 초기화 실패");
-}
-
-export async function readVersion(): Promise<string | null> {
-  return getDriver().readVersion();
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Op 를 최신 데이터에 적용해 저장. 경쟁에서 지면 다시 읽고 재시도. */
-export async function applyAndSave(op: Op): Promise<Snapshot> {
-  const d = getDriver();
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const cur = await readData();
-    const next = applyOp(cur.data, op);
-    if (next === cur.data) return cur;
-    const version = await d.write(next, cur.version);
-    if (version) return { data: next, version };
-    await sleep(20 + attempt * 30 + Math.floor(Math.random() * 40));
-  }
-  throw new Error("동시 수정이 많아 저장하지 못했습니다. 다시 시도하세요.");
+let log: ReturnType<typeof createOpLog> | null = null;
+export function opLog() {
+  log ??= createOpLog(hasBlobsContext() ? blobsKV() : fileKV());
+  return log;
 }

@@ -23,6 +23,8 @@ export type Op =
   | { kind: "member.remove"; id: string }
   | { kind: "absence.insertMany"; absences: Absence[] }
   | { kind: "absence.remove"; id: string }
+  /** 선택 구간 [first,last] 에 걸친 날만 지우고, 구간 밖 부분은 남긴다 */
+  | { kind: "absence.clearRange"; ids: string[]; first: string; last: string }
   | { kind: "avail.insertMany"; items: OvertimeAvailability[] }
   | { kind: "avail.removeMany"; ids: string[] }
   | { kind: "assign.insert"; assignment: OvertimeAssignment }
@@ -67,6 +69,25 @@ export function applyOp(d: AppData, op: Op): AppData {
     }
     case "absence.remove":
       return { ...d, absences: d.absences.filter((a) => a.id !== op.id) };
+    case "absence.clearRange": {
+      const ids = new Set(op.ids);
+      const out: Absence[] = [];
+      let changed = false;
+      for (const a of d.absences) {
+        if (!ids.has(a.id) || a.startDate > op.last || a.endDate < op.first) {
+          out.push(a);
+          continue;
+        }
+        changed = true;
+        if (a.startDate < op.first) {
+          out.push({ ...a, id: `${a.id}.a`, endDate: shiftDay(op.first, -1) });
+        }
+        if (a.endDate > op.last) {
+          out.push({ ...a, id: `${a.id}.b`, startDate: shiftDay(op.last, 1) });
+        }
+      }
+      return changed ? { ...d, absences: out } : d;
+    }
     case "avail.insertMany": {
       const seen = new Set(d.availability.map((a) => `${a.memberId}|${a.date}`));
       const add: OvertimeAvailability[] = [];
@@ -112,6 +133,12 @@ export function applyOp(d: AppData, op: Op): AppData {
   }
 }
 
+/** YYYY-MM-DD 에서 n일 이동 (시간대 영향 없게 UTC 로 계산) */
+function shiftDay(key: string, n: number): string {
+  const [y, m, day] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, day + n)).toISOString().slice(0, 10);
+}
+
 /* ============================================================
  *  서버 입력 검사 — 로그인 없는 공유 보드라 요청 모양만은 엄격히 본다.
  * ========================================================== */
@@ -126,7 +153,7 @@ const isObj = (v: unknown): v is Obj =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown, max = MAX_TEXT): v is string =>
   typeof v === "string" && v.length <= max;
-const id = (v: unknown): v is string => str(v, 80) && (v as string).length > 0;
+const id = (v: unknown): v is string => str(v, 120) && (v as string).length > 0;
 const date = (v: unknown): v is string =>
   typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 const color = (v: unknown): v is string =>
@@ -176,6 +203,11 @@ export function parseOp(v: unknown): Op | null {
       return list(v.items) && v.items.every(isAvail) ? (v as Op) : null;
     case "avail.removeMany":
       return list(v.ids) && v.ids.every(id) ? (v as Op) : null;
+    case "absence.clearRange":
+      return list(v.ids) && v.ids.every(id) && date(v.first) && date(v.last) &&
+        (v.first as string) <= (v.last as string)
+        ? (v as Op)
+        : null;
     case "assign.insert":
       return isAssign(v.assignment) ? (v as Op) : null;
     case "equip.insert":

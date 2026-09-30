@@ -14,7 +14,7 @@ let server;
 
 before(async () => {
   server = spawn("npx", ["next", "start", "-p", String(PORT), "-H", "127.0.0.1"], {
-    env: { ...process.env, WORKTIME_STORE: "file", WORKTIME_DATA_FILE: path.join(dir, "data.json") },
+    env: { ...process.env, WORKTIME_STORE: "file", WORKTIME_DATA_DIR: dir },
     stdio: "ignore",
     detached: true,
   });
@@ -63,7 +63,7 @@ test("잘못된 요청은 400", async () => {
   assert.equal(bad.status, 400);
 });
 
-test("동시 쓰기 20건이 하나도 유실되지 않는다", async () => {
+test("동시 쓰기 20건이 하나도 유실되지 않는다(파일 저장소)", async () => {
   const ops = Array.from({ length: 20 }, (_, i) => ({
     kind: "avail.insertMany",
     items: [{ id: `c${i}`, memberId: "eunbi", date: `2027-01-${String(i + 1).padStart(2, "0")}` }],

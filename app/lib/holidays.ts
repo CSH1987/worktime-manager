@@ -13,8 +13,15 @@ function instance(): Holidays {
 }
 
 /** 해당 날짜(YYYY-MM-DD)의 공휴일 이름. 없으면 null. */
+function validDate(key: string): Date | null {
+  const d = fromKey(key);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function holidayName(key: string): string | null {
-  const res = instance().isHoliday(fromKey(key));
+  const d = validDate(key);
+  if (!d) return null;
+  const res = instance().isHoliday(d);
   if (!res || !Array.isArray(res) || res.length === 0) return null;
   const pub = res.find((h) => h.type === "public") ?? res[0];
   return pub?.name ?? null;
@@ -22,6 +29,8 @@ export function holidayName(key: string): string | null {
 
 /** 공휴일(public) 여부 */
 export function isPublicHoliday(key: string): boolean {
-  const res = instance().isHoliday(fromKey(key));
+  const d = validDate(key);
+  if (!d) return false;
+  const res = instance().isHoliday(d);
   return Array.isArray(res) && res.some((h) => h.type === "public");
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../lib/store";
 import { formatRange, isWeekend } from "../lib/data";
 import { isPublicHoliday } from "../lib/holidays";
@@ -40,6 +40,8 @@ export default function RangeModal({
       return next;
     });
 
+  const downOnBackdrop = useRef(false);
+
   const targetDates = includeWeekend
     ? dates
     : dates.filter((k) => !isWeekend(k) && !isPublicHoliday(k));
@@ -68,16 +70,22 @@ export default function RangeModal({
     const overlap = store.data.absences.filter(
       (a) => a.startDate <= last && a.endDate >= first,
     );
+    if (!overlap.length) return;
+    const partial = overlap.filter((a) => a.startDate < first || a.endDate > last).length;
     if (
       !(await confirm({
         title: "부재 일괄 삭제",
-        message: `이 기간(${formatRange(first, last)})의 부재 ${overlap.length}건을 모두 삭제할까요?`,
+        message:
+          `이 기간(${formatRange(first, last)})의 부재 ${overlap.length}건을 삭제할까요?` +
+          (partial
+            ? `\n기간 밖으로 이어진 ${partial}건은 이 기간에 해당하는 날만 지우고 나머지는 남깁니다.`
+            : ""),
         confirmText: "삭제",
         danger: true,
       }))
     )
       return;
-    overlap.forEach((a) => store.removeAbsence(a.id));
+    store.clearAbsencesInRange(overlap.map((a) => a.id), first, last);
     onClose();
   };
 
@@ -85,7 +93,12 @@ export default function RangeModal({
     <>
       <div
         className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
-        onClick={onClose}
+        onPointerDown={(e) => {
+          downOnBackdrop.current = e.target === e.currentTarget;
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget && downOnBackdrop.current) onClose();
+        }}
       >
         <div
           role="dialog"

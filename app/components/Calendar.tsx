@@ -76,8 +76,16 @@ export default function Calendar({
 
   useEffect(() => {
     if (!dragStart) return;
+    const cancelDrag = () => {
+      setDragStart(null);
+      setDragEnd(null);
+    };
     window.addEventListener("pointerup", finishDrag);
-    return () => window.removeEventListener("pointerup", finishDrag);
+    window.addEventListener("pointercancel", cancelDrag);
+    return () => {
+      window.removeEventListener("pointerup", finishDrag);
+      window.removeEventListener("pointercancel", cancelDrag);
+    };
   }, [dragStart, finishDrag]);
 
   const showAbs = view !== "잔업";

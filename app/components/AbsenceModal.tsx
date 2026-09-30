@@ -7,6 +7,8 @@ import { isPublicHoliday } from "../lib/holidays";
 import type { AbsenceType } from "../lib/types";
 import { useConfirm } from "./ConfirmDialog";
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export default function AbsenceModal({
   defaultStart,
   defaultEnd,
@@ -38,8 +40,10 @@ export default function AbsenceModal({
 
   const multiDay = start !== end;
 
+  const datesValid = DATE_RE.test(start) && DATE_RE.test(end);
+
   const submit = async () => {
-    if (!memberId) return;
+    if (!memberId || !datesValid) return;
     let s = start;
     let e = end;
     if (s > e) [s, e] = [e, s];
@@ -228,7 +232,7 @@ export default function AbsenceModal({
           </button>
           <button
             onClick={submit}
-            disabled={!memberId}
+            disabled={!memberId || !datesValid}
             className="rounded-lg bg-[#1428A0] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
           >
             등록

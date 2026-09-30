@@ -69,11 +69,15 @@ function ConfirmDialog({
 }: ConfirmOptions & { onConfirm: () => void; onCancel: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" && e.key !== "Enter") return;
+      // 확인창이 열려 있는 동안 Esc/Enter 는 뒤에 있는 창까지 가지 않게
+      e.stopPropagation();
       if (e.key === "Escape") onCancel();
-      if (e.key === "Enter") onConfirm();
+      // 버튼에 포커스가 있으면 브라우저가 그 버튼(취소/확인)을 누르게 둔다
+      else if (!(document.activeElement instanceof HTMLButtonElement)) onConfirm();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [onConfirm, onCancel]);
 
   return (

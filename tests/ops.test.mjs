@@ -97,6 +97,30 @@ test("삭제 계열은 해당 id만 지운다", () => {
   assert.equal(d.members.length, 2);
 });
 
+test("기간 부분 삭제: 구간 밖 앞뒤는 남기고 가운데만 지운다", () => {
+  const d = base();
+  d.absences = [
+    { id: "long", memberId: "a", startDate: "2026-06-01", endDate: "2026-06-30", type: "vacation", label: "", memo: "m" },
+    { id: "in", memberId: "b", startDate: "2026-06-11", endDate: "2026-06-11", type: "annual", label: "", memo: "" },
+    { id: "out", memberId: "b", startDate: "2026-07-01", endDate: "2026-07-01", type: "annual", label: "", memo: "" },
+  ];
+  const r = applyOp(d, { kind: "absence.clearRange", ids: ["long", "in"], first: "2026-06-10", last: "2026-06-12" });
+  const byId = Object.fromEntries(r.absences.map((a) => [a.id, a]));
+  assert.deepEqual(Object.keys(byId).sort(), ["long.a", "long.b", "out"]);
+  assert.equal(byId["long.a"].startDate, "2026-06-01");
+  assert.equal(byId["long.a"].endDate, "2026-06-09");
+  assert.equal(byId["long.b"].startDate, "2026-06-13");
+  assert.equal(byId["long.b"].endDate, "2026-06-30");
+  assert.equal(byId["long.b"].memo, "m");
+});
+
+test("기간 부분 삭제: 월말·연말 경계 날짜 계산", () => {
+  const d = base();
+  d.absences = [{ id: "x", memberId: "a", startDate: "2026-12-30", endDate: "2027-01-02", type: "vacation", label: "", memo: "" }];
+  const r = applyOp(d, { kind: "absence.clearRange", ids: ["x"], first: "2026-12-31", last: "2027-01-01" });
+  assert.deepEqual(r.absences.map((a) => [a.startDate, a.endDate]), [["2026-12-30", "2026-12-30"], ["2027-01-02", "2027-01-02"]]);
+});
+
 test("parseOp: 올바른 요청은 통과", () => {
   const ok = [
     { kind: "member.insert", member: { id: "x", name: "새", color: "#abcdef", active: true } },
@@ -107,6 +131,7 @@ test("parseOp: 올바른 요청은 통과", () => {
     { kind: "equip.insert", equipment: { id: "q", name: "EQ" } },
     { kind: "unavail.insert", item: { id: "q", equipmentId: "e1", startDate: "2026-01-01", endDate: "2026-01-01", reason: "", reportedBy: "" } },
     { kind: "member.remove", id: "a" },
+    { kind: "absence.clearRange", ids: ["ab1"], first: "2026-06-01", last: "2026-06-02" },
   ];
   for (const op of ok) assert.ok(parseOp(op), op.kind);
 });
@@ -126,6 +151,7 @@ test("parseOp: 잘못된 요청은 거부", () => {
     { kind: "avail.removeMany", ids: new Array(2001).fill("x") },
     { kind: "equip.insert", equipment: { id: "q", name: "x".repeat(81) } },
     { kind: "member.remove", id: "" },
+    { kind: "absence.clearRange", ids: ["ab1"], first: "2026-06-02", last: "2026-06-01" },
   ];
   for (const op of bad) assert.equal(parseOp(op), null, JSON.stringify(op)?.slice(0, 60));
 });
