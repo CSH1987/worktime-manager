@@ -26,6 +26,7 @@ const EMPTY: AppData = {
 
 /** 화면이 보일 때만 이 간격으로 새로고침(탭으로 돌아오면 즉시). 무료 요금제 한도를 고려한 값 */
 const POLL_MS = 20_000;
+const IDLE_MS = 10 * 60_000;
 
 let idCounter = 0;
 const newId = () =>
@@ -113,6 +114,19 @@ let pending = 0;
 let writeEpoch = 0;
 let loading: Promise<void> | null = null;
 
+/**
+ * 서버가 저장을 확인한 내 변경(최근 10초). 서버 목록 반영이 늦어(실측 0.5~2.5초)
+ * 다음 응답에 빠져 있어도 화면에서 사라지지 않게 서버 값 위에 다시 얹는다.
+ * applyOp 는 같은 id·같은 (팀원,날짜)를 건너뛰므로 두 번 얹어도 결과가 같다.
+ */
+const RECENT_ACK_MS = 10_000;
+let recentAcked: { op: Op; at: number }[] = [];
+function withRecentAcked(data: AppData): AppData {
+  const t = Date.now();
+  recentAcked = recentAcked.filter((a) => t - a.at < RECENT_ACK_MS);
+  return recentAcked.reduce((d, a) => applyOp(d, a.op), data);
+}
+
 function loadAll(force = false): Promise<void> {
   // 강제 불러오기는 진행 중인(비교용) 불러오기 뒤에 이어 붙인다
   if (loading) return force ? loading.then(() => loadAll(true)) : loading;
@@ -123,7 +137,7 @@ function loadAll(force = false): Promise<void> {
       const wasReady = status === "ready";
       status = "ready";
       if (snap && pending === 0 && epoch === writeEpoch) {
-        currentData = snap.data;
+        currentData = withRecentAcked(snap.data);
         version = snap.version;
         publish();
       } else if (!wasReady) {
@@ -149,12 +163,31 @@ function ensureStarted() {
   started = true;
   loadAll();
   if (!backend.polls) return;
+  // 벽걸이 화면처럼 켜 두기만 하는 경우 무료 한도를 다 쓰지 않도록,
+  // 10분간 조작이 없으면 주기 새로고침을 쉬고 조작하는 순간 즉시 새로고침한다.
+  let lastActive = Date.now();
   const refresh = () => {
     if (document.visibilityState === "visible") loadAll();
   };
-  window.setInterval(refresh, POLL_MS);
-  document.addEventListener("visibilitychange", refresh);
-  window.addEventListener("focus", refresh);
+  const onActive = () => {
+    const idle = Date.now() - lastActive > IDLE_MS;
+    lastActive = Date.now();
+    if (idle) refresh();
+  };
+  window.setInterval(() => {
+    if (Date.now() - lastActive <= IDLE_MS) refresh();
+  }, POLL_MS);
+  document.addEventListener("visibilitychange", () => {
+    lastActive = Date.now();
+    refresh();
+  });
+  window.addEventListener("focus", () => {
+    lastActive = Date.now();
+    refresh();
+  });
+  for (const ev of ["pointerdown", "keydown", "wheel", "touchstart"]) {
+    window.addEventListener(ev, onActive, { passive: true });
+  }
 }
 
 function subscribe(cb: () => void) {
@@ -205,8 +238,9 @@ function commit(op: Op): Promise<void> {
       const snap = await backend.persist(op);
       pending--;
       writeEpoch++;
+      recentAcked.push({ op, at: Date.now() });
       if (pending === 0) {
-        currentData = snap.data;
+        currentData = withRecentAcked(snap.data);
         version = snap.version;
         publish();
       }

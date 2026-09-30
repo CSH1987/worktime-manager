@@ -32,6 +32,16 @@ interface StoredSnapshot {
   data: AppData;
   /** 이 키까지의 변경이 data 에 들어 있다 ("" = 없음) */
   cutoff: string;
+  /** 스냅샷을 쓴 시각(ms). 쓴 지 DELETE_GRACE_MS 가 지나야 이 스냅샷이 담은 변경 키를 지운다 */
+  writtenAt?: number;
+}
+
+/** 목록에는 있었는데 내용을 못 읽은 변경 — 건너뛰면 영구 유실이 되므로 중단하고 다시 읽는다 */
+export class MissingOpError extends Error {
+  constructor(key: string) {
+    super(`변경 기록을 읽지 못했습니다: ${key}`);
+    this.name = "MissingOpError";
+  }
 }
 
 const SNAPSHOT = "snapshot";
@@ -40,6 +50,13 @@ const OPS = "ops/";
 export const COMPACT_LAG_MS = 60_000;
 /** cutoff 아래이면서 이보다 오래된 변경만 지운다 */
 export const DELETE_AFTER_MS = 24 * 60 * 60_000;
+/**
+ * 스냅샷을 쓴 뒤 이만큼 지나야 그 스냅샷이 담은 변경을 지운다.
+ * 그 사이 옛 스냅샷을 읽고 있던 다른 서버가 "목록에서 사라진 변경"을 놓치지 않게.
+ */
+export const DELETE_GRACE_MS = 60 * 60_000;
+/** 이 서버가 방금 쓴 변경은 목록에 늦게 보여도(실측 0.5~2.5초) 읽기에 합친다 */
+export const RECENT_WRITE_MS = 15_000;
 /** cutoff 뒤에 쌓인 (접을 수 있는) 변경이 이만큼이면 스냅샷을 새로 만든다 */
 export const COMPACT_MIN_OPS = 20;
 
@@ -65,6 +82,8 @@ const keyMs = (key: string) => Number(key.slice(OPS.length, OPS.length + 15));
 export function createOpLog(kv: KV, now: () => number = Date.now) {
   // 변경은 한 번 쓰면 안 바뀌므로 같은 서버 인스턴스 안에서는 다시 받지 않는다
   const opCache = new Map<string, Op>();
+  /** 이 서버 인스턴스가 최근에 쓴 변경 (키 → 쓴 시각) */
+  const recentWrites = new Map<string, number>();
 
   const getOp = async (key: string): Promise<Op | null> => {
     const hit = opCache.get(key);
@@ -85,27 +104,45 @@ export function createOpLog(kv: KV, now: () => number = Date.now) {
     let last = base.cutoff;
     keys.forEach((k, i) => {
       const op = ops[i];
-      if (op) data = applyOp(data, op);
+      if (!op) throw new MissingOpError(k);
+      data = applyOp(data, op);
       last = k;
     });
     return { data, last };
   }
 
-  /** 지금 데이터. extra 는 목록에 아직 안 보이는 내 변경(키 순서대로 끼워 넣음) */
-  async function read(extra?: { key: string; op: Op }): Promise<Snapshot> {
-    const [base, all] = await Promise.all([loadSnapshot(), kv.listKeys(OPS)]);
-    if (extra && !all.includes(extra.key)) {
-      opCache.set(extra.key, extra.op);
-      all.push(extra.key);
+  /** 목록 + 이 서버가 최근 쓴(아직 목록에 안 보일 수 있는) 변경 */
+  async function listWithRecent(): Promise<string[]> {
+    const all = await kv.listKeys(OPS);
+    const seen = new Set(all);
+    const t = now();
+    for (const [k, at] of recentWrites) {
+      if (t - at > RECENT_WRITE_MS) recentWrites.delete(k);
+      else if (!seen.has(k)) all.push(k);
     }
-    all.sort();
+    return all.sort();
+  }
+
+  async function readOnce(): Promise<Snapshot> {
+    const [base, all] = await Promise.all([loadSnapshot(), listWithRecent()]);
     const { data } = await fold(base, all.filter((k) => k > base.cutoff));
     return { data, version: versionOf(all, base.cutoff) };
   }
 
+  /** 지금 데이터. 읽는 도중 다른 서버가 기록을 정리했으면 다시 읽는다 */
+  async function read(): Promise<Snapshot> {
+    for (let i = 0; ; i++) {
+      try {
+        return await readOnce();
+      } catch (e) {
+        if (!(e instanceof MissingOpError) || i >= 3) throw e;
+      }
+    }
+  }
+
   /** 바뀌었는지만 볼 때 쓰는 가벼운 버전 (목록 1회). read() 와 같은 규칙 */
   async function version(): Promise<string> {
-    const keys = (await kv.listKeys(OPS)).sort();
+    const keys = await listWithRecent();
     if (keys.length) return versionOf(keys, "");
     const base = await loadSnapshot();
     return versionOf(keys, base.cutoff);
@@ -118,16 +155,19 @@ export function createOpLog(kv: KV, now: () => number = Date.now) {
     all.sort();
     const lagLimit = opKey(t - COMPACT_LAG_MS, "");
     const foldable = all.filter((k) => k > base.cutoff && k < lagLimit);
-    let cutoff = base.cutoff;
     if (foldable.length >= COMPACT_MIN_OPS) {
+      // 못 읽은 변경이 있으면 MissingOpError 로 여기서 멈춘다(빠진 스냅샷을 쓰지 않음)
       const { data, last } = await fold(base, foldable);
-      await kv.setJSON(SNAPSHOT, { data, cutoff: last } satisfies StoredSnapshot);
-      cutoff = last;
+      await kv.setJSON(SNAPSHOT, { data, cutoff: last, writtenAt: t } satisfies StoredSnapshot);
+      // 방금 접은 것은 지우지 않는다 — 삭제는 나중 정리 때, 유예 시간이 지난 스냅샷 기준으로만
+      return;
     }
-    // 저장된 스냅샷이 이미 담고 있는 것 중 하루 넘은 것만 지운다(가장 최신 키는 버전용으로 남김)
+    // 이미 저장돼 있던(쓴 지 1시간 넘은) 스냅샷이 담은 것 중 하루 넘은 것만 지운다.
+    // 가장 최신 키는 버전 계산용으로 남긴다.
+    if (!base.cutoff || !base.writtenAt || t - base.writtenAt < DELETE_GRACE_MS) return;
     const newest = all[all.length - 1];
     const stale = all.filter(
-      (k) => k <= cutoff && k !== newest && keyMs(k) < t - DELETE_AFTER_MS,
+      (k) => k <= base.cutoff && k !== newest && keyMs(k) < t - DELETE_AFTER_MS,
     );
     await Promise.all(
       stale.map(async (k) => {
@@ -142,7 +182,8 @@ export function createOpLog(kv: KV, now: () => number = Date.now) {
     const key = opKey(now(), Math.random().toString(36).slice(2, 10));
     await kv.setJSON(key, op);
     opCache.set(key, op);
-    const snap = await read({ key, op });
+    recentWrites.set(key, now());
+    const snap = await read();
     // 가끔만 접는다 (실패해도 데이터는 이미 안전하게 저장됨)
     if (Math.random() < 0.2) {
       await compact().catch((e) => console.error("[oplog] compact failed", e));

@@ -1,7 +1,7 @@
 // 변경 기록 저장 방식 테스트 — 목록 반영이 늦는 가짜 저장소로 유실 여부를 본다.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createOpLog, COMPACT_LAG_MS, DELETE_AFTER_MS, COMPACT_MIN_OPS } from "../app/lib/oplog.ts";
+import { createOpLog, MissingOpError, COMPACT_LAG_MS, DELETE_AFTER_MS, DELETE_GRACE_MS, COMPACT_MIN_OPS } from "../app/lib/oplog.ts";
 
 /** 쓰기는 즉시 저장되지만 목록에는 lagMs 뒤에 보이는 저장소 (실측: 0.5~2.5초) */
 function fakeKV({ lagMs = 0, clock }) {
@@ -67,27 +67,62 @@ test("서버 인스턴스 여러 개가 동시에 50건 저장해도 유실 0 (�
   for (let i = 0; i < 50; i++) assert.ok(s.data.availability.some((a) => a.id === `v${i}`), `v${i}`);
 });
 
-test("스냅샷 접기·오래된 기록 삭제 후에도 데이터가 같고, 여러 인스턴스가 동시에 접어도 유실 0", async () => {
-  let t = 1_000_000;
-  const kv = fakeKV({ lagMs: 0, clock: () => t });
-  const a = createOpLog(kv, () => t);
-  for (let i = 0; i < COMPACT_MIN_OPS + 10; i++) {
-    await a.append(uniqueAvail(i));
-    t += 10;
+test("스냅샷 접기 → (유예 뒤) 오래된 기록 삭제 후에도 데이터가 같고, 동시 접기·새 변경에도 유실 0", async () => {
+  for (let round = 0; round < 20; round++) {
+    let t = 1_000_000;
+    const kv = fakeKV({ lagMs: 0, clock: () => t });
+    const a = createOpLog(kv, () => t);
+    for (let i = 0; i < COMPACT_MIN_OPS + 10; i++) {
+      await a.append(uniqueAvail(i));
+      t += 10;
+    }
+    const before = await createOpLog(kv, () => t).read();
+    t += COMPACT_LAG_MS + DELETE_AFTER_MS + 1000;
+    const inst = [0, 1, 2].map(() => createOpLog(kv, () => t));
+    await Promise.all([...inst.map((x) => x.compact().catch((e) => e)), inst[1].append(uniqueAvail(999))]);
+    assert.ok(kv.m.has("snapshot"), "스냅샷 생성");
+    t += DELETE_GRACE_MS + 1000;
+    // 유예가 지난 뒤 정리(삭제) — 여러 서버가 동시에, 새 변경도 함께
+    const more = [0, 1, 2].map(() => createOpLog(kv, () => t));
+    await Promise.all([...more.map((x) => x.compact().catch((e) => e)), more[0].append(uniqueAvail(1000))]);
+    const after = await createOpLog(kv, () => t).read();
+    const ids = (d) => d.availability.map((x) => x.id).sort();
+    assert.deepEqual(ids(after.data).filter((x) => x !== "v999" && x !== "v1000"), ids(before.data), `round ${round}`);
+    assert.ok(ids(after.data).includes("v999") && ids(after.data).includes("v1000"));
+    const opCount = [...kv.m.keys()].filter((k) => k.startsWith("ops/")).length;
+    assert.ok(opCount <= 3, `오래된 기록 삭제됨 (남은 ${opCount}건)`);
   }
-  const before = await a.read();
-  t += COMPACT_LAG_MS + DELETE_AFTER_MS + 1000;
-  // 동시에 접기 3번 + 접는 사이 새 변경
-  const b = createOpLog(kv, () => t);
-  const c = createOpLog(kv, () => t);
-  await Promise.all([a.compact(), b.compact(), c.compact(), b.append(uniqueAvail(999))]);
-  const after = await createOpLog(kv, () => t).read();
-  const ids = (d) => d.availability.map((x) => x.id).sort();
-  assert.deepEqual(ids(after.data).filter((x) => x !== "v999"), ids(before.data));
-  assert.ok(ids(after.data).includes("v999"));
-  assert.ok(kv.m.has("snapshot"), "스냅샷 생성");
-  const opCount = [...kv.m.keys()].filter((k) => k.startsWith("ops/")).length;
-  assert.ok(opCount < COMPACT_MIN_OPS + 11, `오래된 기록 삭제됨 (남은 ${opCount}건)`);
+});
+
+test("목록에는 있는데 내용을 못 읽는 변경이 있으면 스냅샷을 쓰지 않는다(빠진 채 접기 금지)", async () => {
+  let t = 1_000_000;
+  const kv = fakeKV({ clock: () => t });
+  const log = createOpLog(kv, () => t);
+  for (let i = 0; i < COMPACT_MIN_OPS + 2; i++) { await log.append(uniqueAvail(i)); t += 10; }
+  t += COMPACT_LAG_MS + 1000;
+  // 다른 서버가 이 키를 지운 직후를 흉내: 목록에는 보이지만 내용은 null
+  const victim = [...kv.m.keys()].filter((k) => k.startsWith("ops/")).sort()[3];
+  const realGet = kv.getJSON;
+  kv.getJSON = async (k) => (k === victim ? null : realGet(k));
+  const cold = createOpLog(kv, () => t); // 캐시 없는 새 서버
+  await assert.rejects(cold.compact(), MissingOpError);
+  assert.ok(!kv.m.has("snapshot"), "빠진 스냅샷을 쓰지 않음");
+  await assert.rejects(cold.read(), MissingOpError, "읽기도 빠진 데이터를 정상처럼 돌려주지 않음");
+  kv.getJSON = realGet;
+  const ok = await cold.read();
+  assert.equal(ok.data.availability.length, COMPACT_MIN_OPS + 2);
+});
+
+test("같은 서버에 연달아 저장하면 목록 반영이 늦어도 두 번째 응답에 첫 번째가 들어 있다", async () => {
+  let t = 1_000_000;
+  const kv = fakeKV({ lagMs: 2500, clock: () => t });
+  const log = createOpLog(kv, () => t);
+  await log.append(uniqueAvail(1));
+  t += 200;
+  const r2 = await log.append(uniqueAvail(2));
+  const ids = r2.data.availability.map((a) => a.id);
+  assert.ok(ids.includes("v1") && ids.includes("v2"));
+  assert.equal(await log.version(), r2.version, "응답 버전과 다음 확인 버전이 같음");
 });
 
 test("최근 60초 안의 변경은 접지 않는다(늦게 도착하는 변경 보호)", async () => {
