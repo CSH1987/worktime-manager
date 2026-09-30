@@ -10,6 +10,7 @@ export default function EquipmentPage() {
   const [todayKey, setTodayKey] = useState("2026-06-18");
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 빌드 시각이 아닌 접속 시각의 오늘
     setTodayKey(toKey(new Date()));
   }, []);
 

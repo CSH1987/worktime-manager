@@ -6,10 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/ops.test.mjs",
+    "test:api": "node --test --test-concurrency=1 tests/api.test.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.108.0",
+    "@netlify/blobs": "^11.1.2",
     "date-holidays": "^3.30.2",
     "next": "16.2.7",
     "react": "19.2.4",

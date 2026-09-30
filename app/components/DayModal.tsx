@@ -11,6 +11,9 @@ import {
 import AbsenceModal from "./AbsenceModal";
 import { useConfirm } from "./ConfirmDialog";
 
+/** 추첨 시작 위치 (클릭 때만 호출 — 렌더 중 호출 아님) */
+const randomIndex = (n: number) => Math.floor(Math.random() * n);
+
 export default function DayModal({
   dateKey,
   onClose,
@@ -56,7 +59,7 @@ export default function DayModal({
 
   const runRandom = () => {
     if (!candidates.length || spinId) return;
-    let i = Math.floor(Math.random() * candidates.length);
+    let i = randomIndex(candidates.length);
     let elapsed = 0;
     let step = 80;
     const tick = () => {

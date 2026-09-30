@@ -37,11 +37,14 @@ yarn-error.log*
 # oh-my-claudecode 세션 상태
 .omc/
 
-# vercel
-.vercel
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
 
-.vercel
+
+# 로컬 저장소 파일 (next dev / next start)
+/.data/
+
+# netlify
+.netlify

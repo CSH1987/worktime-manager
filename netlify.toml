@@ -1,0 +1,8 @@
+# Netlify 배포 설정 — Next.js 는 Netlify 가 자동 인식(OpenNext 어댑터)합니다.
+# 데이터는 Netlify Blobs(store "worktime")에 저장되며 따로 설정할 키가 없습니다.
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
