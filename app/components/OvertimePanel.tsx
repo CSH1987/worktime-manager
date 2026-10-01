@@ -33,7 +33,8 @@ export default function OvertimePanel({
     (a, b) => (countMap.get(b.id) ?? 0) - (countMap.get(a.id) ?? 0)
   );
 
-  const isEmpty = activeMembers.length === 0 || total === 0;
+  // 원본과 같게: 이번 달 0회여도 팀원별 0회 목록을 보여 준다(팀원이 없을 때만 빈 안내)
+  const isEmpty = activeMembers.length === 0;
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col gap-4 min-w-0">
