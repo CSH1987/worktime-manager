@@ -41,6 +41,22 @@ npx netlify-cli deploy --prod --build  # 처음이면 새 사이트 만들기 �
 WORKTIME_BLOB_STORE=worktime-test npx netlify-cli deploy --build
 ```
 
+## 내 캘린더 연동 · 백업
+
+**팀원 각자 자기 캘린더에서 모두의 일정을 봅니다.** 헤더의 **캘린더** → 구글 또는 애플 연결.
+연결하면 그 계정에 **‘팀 근태’ 캘린더**가 생기고, 앱 달력의 부재·잔업 확정·잔업 가능 후보·패밀리데이가 들어갑니다(지난 180일 ~ 앞으로 400일).
+
+- 앱에서 바꾸면 몇 초 안에 반영, 그리고 1시간마다 전체를 다시 맞춥니다(`netlify/functions/calendar-reconcile.mts`). 앱 → 캘린더 한 방향이라 캘린더에서 고친 것은 다음 대조 때 앱 내용으로 돌아갑니다.
+- 구글은 `calendar.app.created` 권한만 받습니다 — 앱이 만든 캘린더만 만지고 개인 일정은 못 봅니다.
+- 애플은 Apple ID + **앱 전용 암호**(appleid.apple.com → 로그인 및 보안 → 앱 암호)로 연결합니다.
+- 일정마다 원본 기록이 숨겨져 있어 캘린더에서도 복구할 수 있습니다(`scripts/restore.mjs --from-calendar <연결id>`).
+- 자격증명은 별도 Blobs 저장소(`worktime-calendar`)에 AES-GCM 으로 암호화해 둡니다.
+
+**매일 백업** — 비공개 레포 `worktime-backup` 의 GitHub Actions 가 매일 03:00(KST) `/api/export` 를 받아 커밋합니다. 틀은 `ops/worktime-backup/`.
+복구: `WORKTIME_EXPORT_TOKEN=... node scripts/restore.mjs <백업.json> [--yes]` (`--yes` 없으면 건수만 확인). 복구는 변경 1건으로 기록돼 복구 직전 상태도 남습니다.
+
+필요한 환경변수(키 이름·발급처)는 `.env.local.example` 참고. 키가 없으면 해당 기능만 꺼지고 앱은 그대로 동작합니다.
+
 ---
 
 ## 개발
