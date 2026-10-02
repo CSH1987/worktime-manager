@@ -38,6 +38,8 @@ export interface Connection {
     lastFullAt?: number;
     /** 실패한 연결의 다음 시도 시각(ms) — 10분부터 두 배씩, 최대 24시간 */
     nextRetryAt?: number;
+    /** 실패는 아니지만 사람이 볼 경고(예: 대량 삭제 보류) */
+    warning?: string;
   };
 }
 
@@ -225,8 +227,8 @@ export function publicView(c: Connection) {
     provider: c.provider,
     label: c.label,
     createdAt: c.createdAt,
-    ok: c.status.failures === 0,
+    ok: c.status.failures === 0 && !c.status.warning,
     lastOkAt: c.status.lastOkAt ?? null,
-    lastError: c.status.failures > 0 ? (c.status.lastError ?? "동기화 실패") : null,
+    lastError: c.status.failures > 0 ? (c.status.lastError ?? "동기화 실패") : (c.status.warning ?? null),
   };
 }

@@ -154,14 +154,21 @@ export interface SyncPlan {
  */
 export const MASS_DELETE_MIN = 10;
 export const MASS_DELETE_RATIO = 0.2;
-export function isMassDelete(removeCount: number, haveCount: number): boolean {
-  return removeCount > MASS_DELETE_MIN && removeCount > haveCount * MASS_DELETE_RATIO;
+/** futureCount = 캘린더에 있는 일정 중 지울 수 있는(오늘 이후 시작) 일정 수 */
+export function isMassDelete(removeCount: number, futureCount: number): boolean {
+  return removeCount > MASS_DELETE_MIN && removeCount > futureCount * MASS_DELETE_RATIO;
 }
+
+/** 지울 수 있는(오늘 이후 시작) 캘린더 일정 수 */
+export const removableCount = (have: RemoteIndex, today: string) =>
+  [...have.values()].filter((v) => v.start >= today).length;
 
 /**
  * 원하는 목록과 캘린더 현재 상태를 비교해 보낼 것만 고른다.
- * 핵심 원칙: 캘린더는 사이트가 없어져도 남는 이력이다 → 시작일이 오늘보다 이전인 일정은 앱에서
- * 지워져도(팀원 삭제·실수·악용) 캘린더에서는 지우지 않는다. 지울 수 있는 건 오늘 이후의 계획뿐.
+ * 핵심 원칙: 캘린더는 사이트가 없어져도 남는 이력이다 → 캘린더에 이미 있는 일정 중 시작일이 오늘보다
+ * 이전인 것은 **고정**한다: 지우지도, 고치지도(날짜 이동·내용 덮어쓰기) 않는다. 앱에서 지워지거나
+ * 바뀌어도(팀원 삭제·실수·악용·지운 id 재사용) 그날 기록 그대로 남는다. 바꾸거나 지울 수 있는 건
+ * 오늘 이후에 시작하는 계획뿐이다. 앱에 늦게 들어온 지난 기록은 새로 추가는 한다.
  */
 export function planSync(want: CalendarEvent[], have: RemoteIndex, today: string): SyncPlan {
   const plan: SyncPlan = { insert: [], update: [], remove: [] };
@@ -170,7 +177,7 @@ export function planSync(want: CalendarEvent[], have: RemoteIndex, today: string
     wanted.add(e.uid);
     const cur = have.get(e.uid);
     if (!cur) plan.insert.push(e);
-    else if (cur.hash !== e.hash) plan.update.push({ event: e, ref: cur.ref });
+    else if (cur.hash !== e.hash && cur.start >= today) plan.update.push({ event: e, ref: cur.ref });
   }
   for (const [uid, cur] of have) {
     if (!wanted.has(uid) && cur.start >= today) plan.remove.push({ uid, ref: cur.ref });
@@ -180,7 +187,8 @@ export function planSync(want: CalendarEvent[], have: RemoteIndex, today: string
 
 /**
  * 캘린더 일정에 실린 원본 기록들 → 앱 데이터(복구용).
- * 팀원·설비 목록은 일정에 없으므로 이름만 아는 팀원은 회색으로 되살린다.
+ * 팀원·설비 목록은 일정에 없으므로 지금 목록에 없는 팀원은 회색·비활성으로 되살린다
+ * (퇴사자가 잔업 추첨·선택 목록에 다시 나타나지 않게).
  */
 export function dataFromPayloads(payloads: CalendarPayload[], base?: AppData): AppData {
   const out: AppData = base
@@ -189,7 +197,7 @@ export function dataFromPayloads(payloads: CalendarPayload[], base?: AppData): A
   const members = new Map(out.members.map((m) => [m.id, m]));
   const addMember = (id: string, name: string) => {
     if (!members.has(id)) {
-      const m = { id, name, color: "#717171", active: true };
+      const m = { id, name, color: "#717171", active: false };
       members.set(id, m);
       out.members.push(m);
     }

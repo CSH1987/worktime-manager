@@ -9,7 +9,7 @@
 //    → 지난 일정은 캘린더에서 지우지 않는다(planSync), 앞으로의 일정도 한꺼번에 많이 지우면 보류한다.
 //  실패한 연결은 10분 → 20분 → … → 최대 24시간 간격으로만 다시 시도한다(무한 반복 비용 방지).
 // ============================================================
-import { desiredEvents, isMassDelete, planSync, seoulToday, type CalendarEvent, type CalendarPayload, type RemoteIndex } from "./calendar-events.ts";
+import { desiredEvents, isMassDelete, planSync, removableCount, seoulToday, type CalendarEvent, type CalendarPayload, type RemoteIndex } from "./calendar-events.ts";
 import * as google from "./calendar-google.ts";
 import { CalendarGoneError, RateLimitError, ReauthError } from "./calendar-google.ts";
 import { calendarKV, connections, decrypt, type Connection, type GoogleCreds } from "./calendar-store.ts";
@@ -68,7 +68,7 @@ async function syncOne(c: Connection, want: CalendarEvent[], today: string, dead
   const plan = planSync(want, index, today);
   // 앞으로의 일정도 한꺼번에 많이 지워야 하면 앱 쪽 고장으로 보고 보류한다
   // (일부러 대량 정리할 때만 WORKTIME_ALLOW_MASS_DELETE=1 로 잠깐 풀기)
-  const held = isMassDelete(plan.remove.length, index.size) && process.env.WORKTIME_ALLOW_MASS_DELETE !== "1";
+  const held = isMassDelete(plan.remove.length, removableCount(index, today)) && process.env.WORKTIME_ALLOW_MASS_DELETE !== "1";
   const jobs: (() => Promise<void>)[] = [
     ...(held ? [] : plan.remove.map((r) => () => target.remove(r.uid))),
     ...plan.update.map((u) => () => target.put(u.event, u.ref)),
@@ -145,9 +145,7 @@ export async function syncCalendars(opts: { mode: "scheduled" | "full"; budgetMs
     try {
       const r = await syncOne(c, want, today, deadline);
       const complete = r.remaining === 0 && r.failed === 0;
-      if (r.held > 0) {
-        await fail(`앞으로의 일정 ${r.held}건 삭제를 보류했습니다(한꺼번에 많이 지워짐 — 앱 데이터 확인 필요). 캘린더 이력은 그대로입니다.`);
-      } else if (r.failed > 0) {
+      if (r.failed > 0) {
         await fail(`일정 ${r.failed}건을 보내지 못했습니다 — 잠시 뒤 다시 시도합니다.`);
       } else {
         await connections().update(c.id, (x) => {
@@ -156,6 +154,10 @@ export async function syncCalendars(opts: { mode: "scheduled" | "full"; budgetMs
           x.status.lastError = undefined;
           x.status.nextRetryAt = undefined;
           x.status.lastOkAt = new Date().toISOString();
+          // 삭제 보류는 실패가 아니라 경고 — 새 일정은 계속 10분마다 반영하고, 같은 버전이면 다시 돌지 않는다
+          x.status.warning = r.held
+            ? `앞으로의 일정 ${r.held}건 삭제를 보류했습니다(한꺼번에 많이 지워짐 — 앱 데이터 확인 필요). 캘린더 이력은 그대로입니다.`
+            : undefined;
           // 다 보낸 때만 '이 버전 완료' — 덜 보냈으면 다음 실행이 이어 간다
           if (complete) {
             x.status.syncedVersion = version;
@@ -164,7 +166,7 @@ export async function syncCalendars(opts: { mode: "scheduled" | "full"; budgetMs
         });
       }
       if (r.firstError) console.error(`[calendar] 연결 ${c.id} 일정 ${r.failed}건 실패: ${(r.firstError as Error).name}`);
-      results.push({ id: c.id, done: complete && r.held === 0, sent: r.sent, failed: r.failed, remaining: r.remaining, held: r.held || undefined });
+      results.push({ id: c.id, done: complete, sent: r.sent, failed: r.failed, remaining: r.remaining, held: r.held || undefined });
     } catch (e) {
       if (e instanceof CalendarGoneError) {
         // 팀원이 '팀 근태' 캘린더를 지웠다 = 그만 받겠다는 뜻 → 연결 해제 (다시 만들지 않음)

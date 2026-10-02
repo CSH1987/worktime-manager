@@ -109,7 +109,7 @@ test("자격증명 암호화·서명·계정 가리기", () => {
 });
 
 import { chunkText } from "../app/lib/calendar-google.ts";
-import { isMassDelete, restoreBase } from "../app/lib/calendar-events.ts";
+import { isMassDelete, removableCount, restoreBase } from "../app/lib/calendar-events.ts";
 import { retryDelay } from "../app/lib/calendar-sync.ts";
 
 test("구글 조각 나누기는 이모지를 둘로 가르지 않는다", () => {
@@ -158,7 +158,7 @@ test("대량 삭제 막기: 앱 데이터가 크게 줄면 캘린더 이력을 �
   for (let i = 0; i < 30; i++) have.set(`tmx${i}`, { hash: "h", ref: "r", start: "2026-11-01" });
   const empty = { ...base(), absences: [], availability: [], assignments: [] };
   const p = planSync(desiredEvents(empty, TODAY), have, TODAY);
-  assert.equal(isMassDelete(p.remove.length, have.size), true);
+  assert.equal(isMassDelete(p.remove.length, removableCount(have, TODAY)), true);
 });
 
 test("해제 뒤 다시 연결하면 예전 '팀 근태' 캘린더를 이어 쓴다", async () => {
@@ -201,4 +201,43 @@ test("실패한 연결은 10분부터 두 배씩, 최대 24시간 간격으로�
   assert.equal(retryDelay(2), 20 * 60_000);
   assert.equal(retryDelay(4), 80 * 60_000);
   assert.equal(retryDelay(20), 24 * 60 * 60_000);
+});
+
+test("핵심: 지난 일정은 수정 경로로도 못 바꾼다(지운 id 재사용으로 미래로 옮긴 뒤 지우기 차단)", () => {
+  const d = base();
+  d.absences.push({ id: "X", memberId: "a", startDate: "2026-09-01", endDate: "2026-09-03", type: "annual", label: "", memo: "원본" });
+  const want = desiredEvents(d, TODAY);
+  const have = new Map(want.map((e) => [e.uid, { hash: e.hash, ref: e.uid, start: e.start }]));
+  // 1) 지운 뒤 같은 id 로 미래·다른 내용으로 다시 넣기
+  let x = applyOp(d, { kind: "absence.remove", id: "X" });
+  x = applyOp(x, { kind: "absence.insertMany", absences: [{ id: "X", memberId: "a", startDate: "2099-01-01", endDate: "2099-01-01", type: "etc", label: "", memo: "" }] });
+  const p1 = planSync(desiredEvents(x, TODAY), have, TODAY);
+  assert.ok(!p1.update.some((u) => u.event.uid === eventUid("abs:X")), "지난 일정은 덮어쓰지 않음");
+  // 2) 다시 지워도 캘린더의 그 일정은 지난 날짜 그대로라 지우지 않음
+  const p2 = planSync(desiredEvents(applyOp(x, { kind: "absence.remove", id: "X" }), TODAY), have, TODAY);
+  assert.ok(!p2.remove.some((r) => r.uid === eventUid("abs:X")));
+  // 3) 지난 날짜 잔업 가능 묶음에서 한 사람만 빼도 그날 일정은 그대로
+  const d3 = base();
+  d3.availability = [{ id: "pv1", memberId: "a", date: "2026-09-10" }, { id: "pv2", memberId: "b", date: "2026-09-10" }];
+  const w3 = desiredEvents(d3, TODAY);
+  const h3 = new Map(w3.map((e) => [e.uid, { hash: e.hash, ref: e.uid, start: e.start }]));
+  const p3 = planSync(desiredEvents(applyOp(d3, { kind: "avail.removeMany", ids: ["pv2"] }), TODAY), h3, TODAY);
+  assert.equal(p3.update.length + p3.remove.length, 0);
+});
+
+test("대량 삭제 판단은 '지울 수 있는 앞으로의 일정' 수 기준(지난 이력이 많아도 보호가 약해지지 않음)", () => {
+  const have = new Map();
+  for (let i = 0; i < 400; i++) have.set(`tmp${i}`, { hash: "h", ref: "r", start: "2025-01-01" });
+  for (let i = 0; i < 60; i++) have.set(`tmf${i}`, { hash: "h", ref: "r", start: "2026-12-01" });
+  assert.equal(removableCount(have, TODAY), 60);
+  assert.equal(isMassDelete(60, removableCount(have, TODAY)), true, "앞으로의 계획 60건을 한꺼번에 지우면 보류");
+});
+
+test("캘린더로 되살릴 때 지금 없는 팀원은 비활성으로", () => {
+  const d = base();
+  const payloads = desiredEvents(d, TODAY).map((e) => e.payload);
+  const back = dataFromPayloads(payloads, { ...d, members: [d.members[0]], absences: [], availability: [], assignments: [] });
+  const b = back.members.find((m) => m.id === "b");
+  assert.equal(b?.active, false);
+  assert.equal(back.members.find((m) => m.id === "a")?.active, true, "지금 팀원은 그대로");
 });
