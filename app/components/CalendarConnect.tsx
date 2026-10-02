@@ -179,7 +179,7 @@ export default function CalendarConnect() {
         onClick={openModal}
         className="rounded-full px-3 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 sm:px-3.5"
       >
-        캘린더
+        📅 캘린더 연동
       </button>
       {/* 헤더의 backdrop-blur 가 fixed 위치의 기준을 헤더로 바꾸므로 body 로 띄운다 */}
       {open && createPortal(
