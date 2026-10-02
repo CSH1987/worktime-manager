@@ -11,13 +11,14 @@ const back = (request: Request, hash: string) =>
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const fail = (msg: string) => back(request, `#calerr=${encodeURIComponent(msg)}`);
-  if (url.searchParams.get("error")) return fail("구글 연결을 취소했습니다.");
+  // 화면에는 정해진 문구만 보이도록 짧은 코드만 넘긴다(주소에 임의 문구를 넣어 가짜 안내를 띄우지 못하게)
+  const fail = (code: string) => back(request, `#calerr=${code}`);
+  if (url.searchParams.get("error")) return fail("cancelled");
   const state = verify<{ n: string; r: string }>(url.searchParams.get("state") ?? "");
   const nonce = /(?:^|;\s*)wt_cal_nonce=([^;]+)/.exec(request.headers.get("cookie") ?? "")?.[1];
-  if (!state || !nonce || state.n !== nonce) return fail("연결 시간이 지났습니다. 다시 시도해 주세요.");
+  if (!state || !nonce || state.n !== nonce) return fail("expired");
   const code = url.searchParams.get("code");
-  if (!code) return fail("구글 응답이 올바르지 않습니다.");
+  if (!code) return fail("failed");
   try {
     const t = await exchangeCode(code, state.r);
     const hash = accountHash("google", t.email);
@@ -32,6 +33,7 @@ export async function GET(request: Request) {
     return res;
   } catch (e) {
     console.error(`[calendar] 구글 연결 실패: ${(e as Error).name}`);
-    return fail((e as Error).message.slice(0, 200));
+    const name = (e as Error).name;
+    return fail(name === "TooManyConnectionsError" ? "capacity" : name === "ScopeMissingError" ? "scope" : "failed");
   }
 }

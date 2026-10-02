@@ -13,9 +13,13 @@ const CAL_NAME = "팀 근태";
 export class ReauthError extends Error {
   name = "ReauthError";
 }
-/** 사용자가 구글 계정 설정에서 이 앱의 권한을 없앤 경우(invalid_grant) — 연결을 정리한다 */
-export class RevokedError extends ReauthError {
-  name = "RevokedError";
+/** 동의 화면에서 캘린더 권한 체크를 빼고 허용한 경우 */
+export class ScopeMissingError extends Error {
+  name = "ScopeMissingError";
+}
+/** 구글 사용량 한도(429, 403 rateLimitExceeded·quotaExceeded) — 그 연결은 바로 멈추고 나중에 다시 */
+export class RateLimitError extends Error {
+  name = "RateLimitError";
 }
 /** 앱이 만든 캘린더를 사용자가 지운 경우 */
 export class CalendarGoneError extends Error {
@@ -51,7 +55,8 @@ async function tokenCall(params: Record<string, string>) {
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, string>;
   if (!res.ok) {
-    if (body.error === "invalid_grant") throw new RevokedError("구글 연결이 취소되었거나 만료되었습니다.");
+    // invalid_grant = 팀원이 권한을 없앴거나 토큰이 만료됨. 둘을 구분할 수 없으므로 지우지 않고 '다시 연결 필요' 로 둔다
+    if (body.error === "invalid_grant") throw new ReauthError("구글 연결이 취소되었거나 만료되었습니다.");
     throw new Error(`구글 토큰 오류 ${res.status} ${body.error ?? ""}`.trim());
   }
   return body;
@@ -62,7 +67,7 @@ export async function exchangeCode(code: string, redirectUri: string) {
   const t = await tokenCall({ code, redirect_uri: redirectUri, grant_type: "authorization_code" });
   if (!t.refresh_token) throw new Error("구글이 갱신 토큰을 주지 않았습니다. 다시 연결해 주세요.");
   if (!String(t.scope ?? "").includes("calendar.app.created")) {
-    throw new Error("캘린더 권한에 체크하지 않았습니다. 다시 연결하면서 캘린더 권한을 허용해 주세요.");
+    throw new ScopeMissingError("캘린더 권한에 체크하지 않았습니다.");
   }
   // id_token 은 구글에서 TLS 로 바로 받은 값이라 서명 검증 없이 이메일만 읽는다
   const claims = JSON.parse(Buffer.from(String(t.id_token ?? "").split(".")[1] ?? "", "base64url").toString("utf8") || "{}");
@@ -90,6 +95,11 @@ async function call(access: string, method: string, url: string, body?: unknown)
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) throw new ReauthError("구글 연결이 만료되었습니다.");
+  if (res.status === 429) throw new RateLimitError("구글 사용량 한도");
+  if (res.status === 403) {
+    const reason = await res.clone().json().then((b) => b?.error?.errors?.[0]?.reason ?? "").catch(() => "");
+    if (/rateLimitExceeded|userRateLimitExceeded|quotaExceeded/.test(reason)) throw new RateLimitError("구글 사용량 한도");
+  }
   return res;
 }
 
@@ -154,6 +164,7 @@ export function payloadOf(props: Record<string, string> | undefined): CalendarPa
 interface GEvent {
   id: string;
   status?: string;
+  start?: { date?: string; dateTime?: string };
   extendedProperties?: { private?: Record<string, string> };
 }
 
@@ -172,7 +183,7 @@ export async function listEvents(access: string, calId: string, withPayload = fa
     for (const ev of body.items ?? []) {
       if (ev.status === "cancelled") continue;
       const p = ev.extendedProperties?.private;
-      index.set(ev.id, { hash: p?.wtHash ?? "", ref: ev.id });
+      index.set(ev.id, { hash: p?.wtHash ?? "", ref: ev.id, start: (ev.start?.date ?? ev.start?.dateTime ?? "").slice(0, 10) });
       if (withPayload) {
         const payload = payloadOf(p);
         if (payload) payloads.push(payload);

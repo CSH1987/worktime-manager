@@ -1,13 +1,13 @@
 "use client";
 
-// 내 캘린더 연결 — 구글/애플 캘린더에 '팀 근태' 캘린더를 만들어 모두의 일정을 받아 본다.
+// 내 캘린더 연결 — 구글 캘린더에 '팀 근태' 캘린더를 만들어 모두의 일정을 받아 본다.
 // 연결한 브라우저는 해제 비밀키를 localStorage 에 보관한다(그 브라우저만 해제 가능).
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 interface Conn {
   id: string;
-  provider: "google" | "apple";
+  provider: "google";
   label: string;
   ok: boolean;
   lastOkAt: string | null;
@@ -29,18 +29,24 @@ function writeOwned(v: Record<string, string>) {
   } catch {}
 }
 
-const PROVIDER = { google: "구글", apple: "애플" } as const;
+const PROVIDER = { google: "구글" } as const;
+
+/** 구글에서 돌아올 때 주소에 붙는 오류 코드 → 정해진 문구만 보여 준다 */
+const CALLBACK_ERRORS: Record<string, string> = {
+  cancelled: "구글 연결을 취소했습니다.",
+  expired: "연결 시간이 지났습니다. 다시 시도해 주세요.",
+  scope: "캘린더 권한 체크박스를 체크하지 않았습니다. 다시 연결하면서 꼭 체크해 주세요.",
+  capacity: "연결 수 상한에 닿았습니다. 관리자에게 알려 주세요.",
+  failed: "연결에 실패했습니다. 잠시 뒤 다시 시도해 주세요.",
+};
 
 export default function CalendarConnect() {
   const [open, setOpen] = useState(false);
-  const [enabled, setEnabled] = useState({ google: false, apple: false });
+  const [enabled, setEnabled] = useState({ google: false });
   const [list, setList] = useState<Conn[]>([]);
   const [owned, setOwned] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [appleForm, setAppleForm] = useState(false);
-  const [appleId, setAppleId] = useState("");
-  const [applePw, setApplePw] = useState("");
 
   const load = useCallback(async () => {
     const r = await fetch("/api/calendar/list", { cache: "no-store" }).then((x) => x.json()).catch(() => null);
@@ -69,6 +75,10 @@ export default function CalendarConnect() {
         }
         if (r.removed) {
           setMsg("캘린더를 찾지 못해 연결이 해제됐습니다. 다시 연결해 주세요.");
+          break;
+        }
+        if (r.held) {
+          setMsg("일정은 들어갔지만, 앞으로의 일정 일부 삭제를 안전을 위해 보류했습니다. 관리자에게 알려 주세요.");
           break;
         }
         if (r.failed > 0 && r.remaining === 0) {
@@ -108,7 +118,7 @@ export default function CalendarConnect() {
         setOwned(next);
         fill(ok[1], ok[2]);
       } else {
-        setMsg(decodeURIComponent(h.replace(/^#calerr=/, "")));
+        setMsg(CALLBACK_ERRORS[h.replace(/^#calerr=/, "")] ?? CALLBACK_ERRORS.failed);
       }
     }, 0);
     return () => clearTimeout(t);
@@ -122,29 +132,6 @@ export default function CalendarConnect() {
       setMsg(r?.error ?? "구글 연결을 시작하지 못했습니다.");
       setBusy(false);
     }
-  }
-
-  async function connectApple() {
-    setBusy(true);
-    setMsg("애플 계정 확인 중…");
-    const r = await fetch("/api/calendar/apple", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ appleId, appPassword: applePw }),
-    })
-      .then((x) => x.json())
-      .catch(() => ({ error: "네트워크 오류" }));
-    setApplePw("");
-    if (r.error) {
-      setMsg(r.error);
-      setBusy(false);
-      return;
-    }
-    const next = { ...readOwned(), [r.id]: r.secret };
-    writeOwned(next);
-    setOwned(next);
-    setAppleForm(false);
-    fill(r.id, r.secret);
   }
 
   async function disconnect(id: string) {
@@ -196,33 +183,14 @@ export default function CalendarConnect() {
               <button disabled={busy || !enabled.google} onClick={connectGoogle} className={`${btn} bg-[#1428A0] text-white disabled:opacity-40`}>
                 구글 캘린더 연결
               </button>
-              {enabled.apple && (
-                <button disabled={busy} onClick={() => setAppleForm((v) => !v)} className={`${btn} bg-slate-900 text-white disabled:opacity-40`}>
-                  애플 캘린더 연결
-                </button>
-              )}
             </div>
             <p className="mt-2 text-xs text-slate-500">
               구글 동의 화면에서 <b>캘린더 권한 체크박스</b>를 꼭 체크하세요. 아이폰은 설정 → 캘린더 → 계정 → 계정 추가 → Google 로 같은 구글 계정을 넣으면 아이폰 캘린더에도 보입니다.
             </p>
-            {!enabled.google && !enabled.apple && (
+            {!enabled.google && (
               <p className="mt-2 text-xs text-slate-400">관리자 설정이 끝나면 연결할 수 있습니다.</p>
             )}
 
-            {appleForm && (
-              <div className="mt-3 space-y-2 rounded-xl bg-slate-50 p-3">
-                <p className="text-xs text-slate-500">
-                  appleid.apple.com → 로그인 및 보안 → 앱 암호에서 만든 16자리 암호를 넣으세요. (평소 비밀번호가 아닙니다)
-                </p>
-                <input value={appleId} onChange={(e) => setAppleId(e.target.value)} placeholder="Apple ID (이메일)" autoComplete="username"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                <input value={applePw} onChange={(e) => setApplePw(e.target.value)} placeholder="앱 전용 암호 xxxx-xxxx-xxxx-xxxx" type="password" autoComplete="off"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                <button disabled={busy || !appleId || !applePw} onClick={connectApple} className={`${btn} w-full bg-slate-900 text-white disabled:opacity-40`}>
-                  연결
-                </button>
-              </div>
-            )}
 
             {msg && <p className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-[#1428A0]">{msg}</p>}
 
@@ -253,11 +221,11 @@ export default function CalendarConnect() {
               <div className="mt-2 space-y-1.5">
                 <p>
                   <b>해제 방법</b>{" "}① 연결했던 브라우저에서 위 목록의 <b>해제</b> 버튼을 누릅니다. ② 다른 기기라면 구글 계정 →
-                  보안 → 타사 앱 및 서비스 → &lsquo;팀 근태 캘린더&rsquo; → 액세스 삭제. 10분 안에 이 목록에서도 정리됩니다.
+                  보안 → 타사 앱 및 서비스 → &lsquo;팀 근태 캘린더&rsquo; → 액세스 삭제. 이 목록에는 &lsquo;다시 연결 필요&rsquo;로 보이다가 30일 뒤 자동 정리됩니다.
                 </p>
                 <p>
                   <b>해제하면</b>{" "}앞으로 바뀌는 내용이 더 이상 들어오지 않습니다. 이미 받은 &lsquo;팀 근태&rsquo; 캘린더와 일정(이력)은
-                  내 구글 캘린더에 <b>그대로 남습니다</b>.
+                  내 구글 캘린더에 <b>그대로 남습니다</b>. 앱에서 지난 기록이 지워져도 캘린더의 지난 일정은 지워지지 않습니다.
                 </p>
                 <p>
                   <b>완전히 지우려면</b>{" "}구글 캘린더 → 설정 → &lsquo;팀 근태&rsquo; → 캘린더 삭제. (지우면 되살릴 수 없습니다)

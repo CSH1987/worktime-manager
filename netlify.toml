@@ -13,14 +13,15 @@
   WORKTIME_STORE = "file"
 
 # 연타·과도한 요청 완화 — IP 하나가 1분에 보낼 수 있는 요청 수 (무료 요금제는 규칙 2개까지). 넘으면 429.
-# 정상 사용은 탭 하나가 20초마다 1번(분당 3회). 이것은 IP 하나의 속도만 막을 뿐 월 총량 보장은 아니다
+# 사무실처럼 여러 사람이 같은 공용 IP 를 쓰므로 넉넉히 잡는다(탭 하나 = 20초마다 1번, 분당 3회 → 60탭 + 저장 여유).
+# 이것은 IP 하나의 속도만 막을 뿐 월 총량 보장은 아니다
 # (여러 IP 로 한 달 내내 두드리면 월 300크레딧이 바닥나 사이트가 멈출 수 있음 — 요금은 붙지 않음).
 [[redirects]]
   from = "/api/calendar/*"
   to = "/api/calendar/:splat"
   status = 200
   [redirects.rate_limit]
-    window_limit = 10
+    window_limit = 30
     window_size = 60
     aggregate_by = ["ip", "domain"]
 
@@ -29,6 +30,6 @@
   to = "/api/:splat"
   status = 200
   [redirects.rate_limit]
-    window_limit = 60
+    window_limit = 240
     window_size = 60
     aggregate_by = ["ip", "domain"]

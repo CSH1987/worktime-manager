@@ -1,5 +1,5 @@
 // 처음 연결한 직후 캘린더 채우기 — 연결한 브라우저가 다 찰 때까지 반복 호출한다.
-//   POST /api/calendar/sync { id, secret } → { done, remaining, failed, removed?, error? }
+//   POST /api/calendar/sync { id, secret } → { done, remaining, failed, held?, removed?, error? }
 // 한 번 다 채운 뒤에는 일을 하지 않는다(그 뒤는 10분 예약 동기화가 맡음) — 반복 호출로 비용을 늘릴 수 없게.
 import { syncCalendars } from "../../../lib/calendar-sync";
 import { json, ownedConnection } from "../../../lib/calendar-http";

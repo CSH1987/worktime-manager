@@ -16,7 +16,7 @@ import type {
   OvertimeAvailability,
 } from "./types";
 
-/** 패밀리데이를 만드는 범위 — 지난 180일 ~ 앞으로 400일 (기록은 날짜 제한 없이 전부 올린다) */
+/** 패밀리데이를 새로 만드는 범위 — 지난 180일 ~ 앞으로 400일. 이미 올라간 지난 패밀리데이는 지우지 않는다(지난 일정 보존) */
 export const PAST_DAYS = 180;
 export const FUTURE_DAYS = 400;
 
@@ -26,12 +26,10 @@ export function windowOf(today: string) {
 }
 
 /**
- * 캘린더로 복구할 때 쓸 바탕 — 지금 데이터에서 "캘린더에 올라가지 않는 기록"
- * (범위 밖·지금 팀원 목록에 없는 팀원)은 그대로 두고, 캘린더가 대신할 기록만 비운다.
+ * 캘린더로 복구할 때 쓸 바탕 — 캘린더에는 지금 팀원의 기록이 날짜 제한 없이 전부 있으므로,
+ * 지금 팀원 목록에 없는 팀원의 기록과 팀원·설비 목록만 지금 데이터에서 가져오고 나머지는 비운다.
  */
-export function restoreBase(current: AppData, today: string): AppData {
-  void today;
-  // 캘린더에는 지금 팀원의 기록이 날짜 제한 없이 전부 있으므로, 지금 팀원 목록에 없는 팀원 기록만 남긴다
+export function restoreBase(current: AppData): AppData {
   const members = new Set(current.members.map((m) => m.id));
   const onCalendar = (memberId: string) => members.has(memberId);
   return {
@@ -89,7 +87,7 @@ function make(
 export function desiredEvents(d: AppData, today: string): CalendarEvent[] {
   const { from, to } = windowOf(today);
   const nameOf = new Map(d.members.map((m) => [m.id, m.name]));
-  const memberName = (id: string) => nameOf.get(id) ?? "(삭제된 팀원)";
+  const memberName = (id: string) => nameOf.get(id) ?? id;
   const out: CalendarEvent[] = [];
 
   for (const a of d.absences) {
@@ -142,7 +140,7 @@ export function desiredEvents(d: AppData, today: string): CalendarEvent[] {
 }
 
 /** 캘린더에 이미 있는 일정의 요약 (uid → 지문) */
-export type RemoteIndex = Map<string, { hash: string; ref: string }>;
+export type RemoteIndex = Map<string, { hash: string; ref: string; /** 일정 시작일 YYYY-MM-DD */ start: string }>;
 
 export interface SyncPlan {
   insert: CalendarEvent[];
@@ -150,10 +148,9 @@ export interface SyncPlan {
   remove: { uid: string; ref: string }[];
 }
 
-/** 원하는 목록과 캘린더 현재 상태를 비교해 보낼 것만 고른다 */
 /**
- * 대량 삭제 막기 — 앱 데이터가 고장·실수로 크게 줄었을 때 연결된 캘린더(=백업)까지 지우지 않게.
- * 한 번에 지울 일정이 이 기준을 넘으면 삭제만 보류하고 추가·수정은 그대로 보낸다.
+ * 대량 삭제 막기(앞으로의 일정에만 해당 — 지난 일정은 planSync 가 아예 지우지 않는다).
+ * 앱 데이터가 고장·실수로 크게 줄었을 때 한 번에 지울 일정이 이 기준을 넘으면 삭제만 보류한다.
  */
 export const MASS_DELETE_MIN = 10;
 export const MASS_DELETE_RATIO = 0.2;
@@ -161,7 +158,12 @@ export function isMassDelete(removeCount: number, haveCount: number): boolean {
   return removeCount > MASS_DELETE_MIN && removeCount > haveCount * MASS_DELETE_RATIO;
 }
 
-export function planSync(want: CalendarEvent[], have: RemoteIndex): SyncPlan {
+/**
+ * 원하는 목록과 캘린더 현재 상태를 비교해 보낼 것만 고른다.
+ * 핵심 원칙: 캘린더는 사이트가 없어져도 남는 이력이다 → 시작일이 오늘보다 이전인 일정은 앱에서
+ * 지워져도(팀원 삭제·실수·악용) 캘린더에서는 지우지 않는다. 지울 수 있는 건 오늘 이후의 계획뿐.
+ */
+export function planSync(want: CalendarEvent[], have: RemoteIndex, today: string): SyncPlan {
   const plan: SyncPlan = { insert: [], update: [], remove: [] };
   const wanted = new Set<string>();
   for (const e of want) {
@@ -170,7 +172,9 @@ export function planSync(want: CalendarEvent[], have: RemoteIndex): SyncPlan {
     if (!cur) plan.insert.push(e);
     else if (cur.hash !== e.hash) plan.update.push({ event: e, ref: cur.ref });
   }
-  for (const [uid, cur] of have) if (!wanted.has(uid)) plan.remove.push({ uid, ref: cur.ref });
+  for (const [uid, cur] of have) {
+    if (!wanted.has(uid) && cur.start >= today) plan.remove.push({ uid, ref: cur.ref });
+  }
   return plan;
 }
 

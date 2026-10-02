@@ -1,6 +1,6 @@
 // ============================================================
 //  캘린더 연결 저장 — 데이터와 다른 Blobs 저장소(<이름>-calendar)에 둔다.
-//  자격증명(구글 갱신 토큰 / 애플 앱 전용 암호)은 AES-256-GCM 으로 암호화하고,
+//  자격증명(구글 갱신 토큰)은 AES-256-GCM 으로 암호화하고,
 //  키는 Netlify 환경변수 WORKTIME_TOKEN_KEY 에만 있다. 응답·로그에 절대 내보내지 않는다.
 // ============================================================
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -8,10 +8,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { getStore } from "@netlify/blobs";
 
-export type Provider = "google" | "apple";
+export type Provider = "google";
 
 export interface GoogleCreds { refreshToken: string }
-export interface AppleCreds { appleId: string; appPassword: string }
 
 export interface Connection {
   id: string;
@@ -23,7 +22,7 @@ export interface Connection {
   secretHash: string;
   /** 암호화된 자격증명 */
   enc: string;
-  /** 구글: 캘린더 id / 애플: 캘린더 URL */
+  /** 구글 캘린더 id */
   calendar: string;
   /** 같은 계정 재연결 판별 (sha256) */
   accountHash?: string;
@@ -31,12 +30,14 @@ export interface Connection {
     lastOkAt?: string;
     lastError?: string;
     failures: number;
-    /** 마지막으로 다 맞춘 데이터 버전 — 같으면 변경 직후 동기화를 건너뛴다 */
+    /** 마지막으로 다 맞춘 데이터 버전 — 같으면 10분 예약 동기화가 이 연결을 건너뛴다 */
     syncedVersion?: string;
     /** 마지막으로 동기화를 시도한 시각(ms) — 예약 대조는 오래된 연결부터 */
     lastCheckedAt?: number;
     /** 마지막 '전체 강제 대조' 시각(ms) — 하루 1번이면 충분 */
     lastFullAt?: number;
+    /** 실패한 연결의 다음 시도 시각(ms) — 10분부터 두 배씩, 최대 24시간 */
+    nextRetryAt?: number;
   };
 }
 
@@ -50,13 +51,6 @@ function keyBytes(): Buffer {
 }
 
 export const hasTokenKey = () => (process.env.WORKTIME_TOKEN_KEY ?? "").length >= 32;
-
-/**
- * 애플(iCloud) 직접 연결은 기본으로 끈다(사용자 결정 2026-10-02: 구글만 사용).
- * 아이폰 사용자는 아이폰 캘린더 앱에 구글 계정을 추가해 같은 '팀 근태' 캘린더를 본다.
- * 다시 켜려면 Netlify 환경변수 WORKTIME_ENABLE_APPLE=1.
- */
-export const appleEnabled = () => process.env.WORKTIME_ENABLE_APPLE === "1";
 
 export function encrypt(value: unknown): string {
   const iv = randomBytes(12);

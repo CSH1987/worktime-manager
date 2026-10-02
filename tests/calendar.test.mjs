@@ -7,7 +7,6 @@ import {
   eventUid,
   planSync,
 } from "../app/lib/calendar-events.ts";
-import { payloadFromIcs, toIcs } from "../app/lib/calendar-apple.ts";
 import { payloadOf } from "../app/lib/calendar-google.ts";
 import { decrypt, encrypt, maskAccount, sign, verify } from "../app/lib/calendar-store.ts";
 import { applyOp, parseData, parseOp } from "../app/lib/ops.ts";
@@ -57,26 +56,18 @@ test("일정 id 는 결정적이고 구글 허용 문자만 쓴다", () => {
 
 test("차이만 보낸다: 추가·수정·삭제", () => {
   const want = desiredEvents(base(), TODAY);
-  const have = new Map(want.map((e) => [e.uid, { hash: e.hash, ref: e.uid }]));
-  assert.deepEqual(planSync(want, have), { insert: [], update: [], remove: [] });
+  const have = new Map(want.map((e) => [e.uid, { hash: e.hash, ref: e.uid, start: e.start }]));
+  assert.deepEqual(planSync(want, have, TODAY), { insert: [], update: [], remove: [] });
 
   const d = base();
   d.absences[0].label = "여행";
   d.assignments = [];
   const next = desiredEvents(d, TODAY);
-  have.set("tmstale", { hash: "x", ref: "r" });
-  const p = planSync([...next, { ...next[0], uid: "tmnew" }], have);
+  have.set("tmstale", { hash: "x", ref: "r", start: "2026-12-01" });
+  const p = planSync([...next, { ...next[0], uid: "tmnew" }], have, TODAY);
   assert.equal(p.update.length, 1, "라벨 바뀐 부재 1건 수정");
   assert.equal(p.insert.length, 1);
   assert.deepEqual(p.remove.map((r) => r.uid).sort(), ["tmstale", eventUid("asg:s1")].sort());
-});
-
-test("애플 ics: 한글·특수문자 접기와 원본 왕복", () => {
-  const e = desiredEvents(base(), TODAY).find((x) => x.title === "가 · 연차");
-  const ics = toIcs(e, new Date("2026-10-02T00:00:00Z"));
-  for (const line of ics.split("\r\n")) assert.ok(Buffer.byteLength(line) <= 75, `75바이트 넘는 줄: ${line}`);
-  assert.ok(ics.includes(String.raw`DESCRIPTION:메모\, 줄바꿈\n있음\;`), "쉼표·줄바꿈·세미콜론 이스케이프");
-  assert.deepEqual(payloadFromIcs(ics), e.payload);
 });
 
 test("구글 확장 속성: 1000자씩 나눈 원본 왕복", () => {
@@ -119,6 +110,7 @@ test("자격증명 암호화·서명·계정 가리기", () => {
 
 import { chunkText } from "../app/lib/calendar-google.ts";
 import { isMassDelete, restoreBase } from "../app/lib/calendar-events.ts";
+import { retryDelay } from "../app/lib/calendar-sync.ts";
 
 test("구글 조각 나누기는 이모지를 둘로 가르지 않는다", () => {
   const s = "가".repeat(999) + "😀" + "끝";
@@ -128,15 +120,6 @@ test("구글 조각 나누기는 이모지를 둘로 가르지 않는다", () =>
     assert.ok(p.length <= 1000);
     assert.ok(!/[\uD800-\uDBFF]$/.test(p), "조각 끝에 짝 잃은 서로게이트 없음");
   }
-});
-
-test("ics: 단독 CR·제어문자로 속성을 끼워 넣을 수 없다", () => {
-  const e = desiredEvents(base(), TODAY).find((x) => x.title === "가 · 연차");
-  const evil = { ...e, title: "x\rATTENDEE:mailto:a@b.c", description: "y\u0000\u0007z" };
-  const ics = toIcs(evil);
-  assert.ok(!/\r\nATTENDEE/.test(ics) && !ics.includes("\rATTENDEE"), "새 속성 줄이 생기지 않음");
-  assert.ok(ics.includes(String.raw`SUMMARY:x\nATTENDEE:mailto:a@b.c`));
-  assert.ok(ics.includes("DESCRIPTION:yz"));
 });
 
 test("해제된 연결은 동시에 돌던 동기화가 되살리지 못한다", async () => {
@@ -157,7 +140,7 @@ test("해제된 연결은 동시에 돌던 동기화가 되살리지 못한다",
 test("캘린더 복구 바탕: 지금 없는 팀원 기록은 남기고 나머지는 캘린더 것으로", () => {
   const d = base();
   d.absences.push({ id: "ghost", memberId: "zz", startDate: "2026-10-05", endDate: "2026-10-05", type: "etc", label: "", memo: "" });
-  const b = restoreBase(d, TODAY);
+  const b = restoreBase(d);
   assert.deepEqual(b.absences.map((a) => a.id).sort(), ["ghost"]);
   assert.equal(b.assignments.length, 0);
   const back = dataFromPayloads(desiredEvents(d, TODAY).map((e) => e.payload), b);
@@ -171,10 +154,10 @@ test("대량 삭제 막기: 앱 데이터가 크게 줄면 캘린더 이력을 �
   assert.equal(isMassDelete(121, 125), true, "앱 데이터가 통째로 사라진 경우는 보류");
   // 앱 데이터가 비었을 때 계획: 전부 삭제 → 보류 대상
   const want = desiredEvents(base(), TODAY);
-  const have = new Map(want.map((e) => [e.uid, { hash: e.hash, ref: e.uid }]));
-  for (let i = 0; i < 30; i++) have.set(`tmx${i}`, { hash: "h", ref: "r" });
+  const have = new Map(want.map((e) => [e.uid, { hash: e.hash, ref: e.uid, start: e.start }]));
+  for (let i = 0; i < 30; i++) have.set(`tmx${i}`, { hash: "h", ref: "r", start: "2026-11-01" });
   const empty = { ...base(), absences: [], availability: [], assignments: [] };
-  const p = planSync(desiredEvents(empty, TODAY), have);
+  const p = planSync(desiredEvents(empty, TODAY), have, TODAY);
   assert.equal(isMassDelete(p.remove.length, have.size), true);
 });
 
@@ -192,4 +175,30 @@ test("해제 뒤 다시 연결하면 예전 '팀 근태' 캘린더를 이어 쓴
   await connections().delete(id);
   assert.equal(await connections().get(id), null);
   assert.equal(await previousCalendar(accountHash("google", "someone@gmail.com")), "cal-123", "해제해도 캘린더 위치는 기억");
+});
+
+test("핵심: 지난 일정은 앱에서 지워져도(팀원 삭제·실수·악용) 캘린더에서 지우지 않는다", () => {
+  const d = base();
+  d.absences.push({ id: "past1", memberId: "b", startDate: "2026-09-01", endDate: "2026-09-02", type: "annual", label: "", memo: "" });
+  d.absences.push({ id: "future1", memberId: "b", startDate: "2026-11-01", endDate: "2026-11-01", type: "annual", label: "", memo: "" });
+  const want = desiredEvents(d, TODAY);
+  const have = new Map(want.map((e) => [e.uid, { hash: e.hash, ref: e.uid, start: e.start }]));
+  // 팀원 '나'(b) 삭제 → 앱에서는 b 의 기록이 모두 사라짐
+  const after = applyOp(d, { kind: "member.remove", id: "b" });
+  const plan = planSync(desiredEvents(after, TODAY), have, TODAY);
+  const removed = new Set(plan.remove.map((r) => r.uid));
+  assert.ok(!removed.has(eventUid("abs:past1")), "지난 부재는 캘린더에 남는다");
+  assert.ok(removed.has(eventUid("abs:future1")), "앞으로의 계획은 지울 수 있다");
+  // 앱 데이터가 통째로 사라져도 지난 일정은 하나도 지우지 않는다
+  const wiped = planSync(desiredEvents({ ...d, members: [], absences: [], availability: [], assignments: [] }, TODAY), have, TODAY);
+  for (const r of wiped.remove) assert.ok(have.get(r.uid).start >= TODAY, "지우는 건 오늘 이후 일정뿐");
+  // 오늘 일정도 보호 대상이 아니라 계획으로 본다(오늘 날짜 = 아직 진행 중)
+  assert.ok(wiped.remove.length >= 1);
+});
+
+test("실패한 연결은 10분부터 두 배씩, 최대 24시간 간격으로만 다시 시도", () => {
+  assert.equal(retryDelay(1), 10 * 60_000);
+  assert.equal(retryDelay(2), 20 * 60_000);
+  assert.equal(retryDelay(4), 80 * 60_000);
+  assert.equal(retryDelay(20), 24 * 60 * 60_000);
 });
