@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import CalendarConnect from "./CalendarConnect";
 import { useView } from "./ViewProvider";
 import type { ViewMode } from "../lib/types";
 
@@ -71,6 +72,7 @@ export default function Header() {
               </Link>
             );
           })}
+          <CalendarConnect />
         </nav>
       </div>
     </header>

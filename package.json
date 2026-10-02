@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/ops.test.mjs tests/oplog.test.mjs",
+    "test": "node --test tests/ops.test.mjs tests/oplog.test.mjs tests/calendar.test.mjs",
     "test:api": "node --test --test-concurrency=1 tests/api.test.mjs"
   },
   "dependencies": {

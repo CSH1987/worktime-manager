@@ -1,0 +1,36 @@
+# 매일 03:00(KST) 운영 데이터 전체를 받아 이 (비공개) 레포에 커밋한다.
+# 필요한 비밀값: Settings → Secrets → Actions → WORKTIME_EXPORT_TOKEN (Netlify 에 넣은 것과 같은 값)
+# 실패하면 GitHub 가 레포 주인에게 메일을 보낸다.
+name: daily-backup
+on:
+  schedule:
+    - cron: "0 18 * * *" # UTC 18:00 = KST 03:00
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 내보내기 받기
+        env:
+          TOKEN: ${{ secrets.WORKTIME_EXPORT_TOKEN }}
+          SITE: https://team-worktime.netlify.app
+        run: |
+          set -euo pipefail
+          day=$(TZ=Asia/Seoul date +%Y/%m/%d)
+          mkdir -p "backups/$(dirname "$day")"
+          curl -fsS --retry 3 --max-time 60 -H "Authorization: Bearer $TOKEN" "$SITE/api/export" -o /tmp/export.json
+          # 모양 확인 — 팀원 목록이 비어 있으면 실패로 본다(빈 데이터로 덮어쓰지 않게)
+          node -e 'const b=require("/tmp/export.json"); if(b.format!=="worktime-backup/1"||!b.data||!b.data.members.length) {console.error("백업 모양 이상"); process.exit(1)} console.log(Object.fromEntries(Object.entries(b.data).map(([k,v])=>[k,v.length])))'
+          cp /tmp/export.json "backups/$day.json"
+          cp /tmp/export.json latest.json
+      - name: 커밋
+        run: |
+          git config user.name "worktime-backup"
+          git config user.email "worktime-backup@users.noreply.github.com"
+          git add backups latest.json
+          git diff --cached --quiet && echo "바뀐 것 없음" || git commit -m "backup $(TZ=Asia/Seoul date +%F)"
+          git push

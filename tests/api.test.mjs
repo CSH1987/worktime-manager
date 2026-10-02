@@ -9,12 +9,13 @@ import path from "node:path";
 
 const PORT = 3100 + Math.floor(Math.random() * 800);
 const BASE = `http://127.0.0.1:${PORT}`;
+const TOKEN = "t".repeat(32);
 const dir = mkdtempSync(path.join(tmpdir(), "worktime-api-"));
 let server;
 
 before(async () => {
   server = spawn("npx", ["next", "start", "-p", String(PORT), "-H", "127.0.0.1"], {
-    env: { ...process.env, WORKTIME_STORE: "file", WORKTIME_DATA_DIR: dir },
+    env: { ...process.env, WORKTIME_STORE: "file", WORKTIME_DATA_DIR: dir, WORKTIME_EXPORT_TOKEN: TOKEN, WORKTIME_TOKEN_KEY: "k".repeat(40) },
     stdio: "ignore",
     detached: true,
   });
@@ -84,4 +85,42 @@ test("쓰기 결과가 다음 읽기에 보이고, 팀원 삭제가 연쇄된다
   ({ data } = await (await fetch(`${BASE}/api/data`)).json());
   assert.ok(!data.members.some((m) => m.id === "tmp"));
   assert.ok(!data.assignments.some((a) => a.id === "t1"));
+});
+
+const admin = { Authorization: `Bearer ${TOKEN}` };
+
+test("백업 내보내기는 비밀 토큰이 있어야 하고, 복구는 변경 1건으로 되돌린다", async () => {
+  assert.equal((await fetch(`${BASE}/api/export`)).status, 401);
+  assert.equal((await fetch(`${BASE}/api/export`, { headers: { Authorization: "Bearer wrong" } })).status, 401);
+  const backup = await (await fetch(`${BASE}/api/export`, { headers: admin })).json();
+  assert.equal(backup.format, "worktime-backup/1");
+  assert.ok(backup.data.members.length > 0);
+
+  // 백업 뒤 데이터를 망가뜨린다
+  await post({ kind: "member.remove", id: "eunbi" });
+  let { data } = await (await fetch(`${BASE}/api/data`)).json();
+  assert.ok(!data.members.some((m) => m.id === "eunbi"));
+
+  assert.equal((await fetch(`${BASE}/api/restore`, { method: "POST", body: JSON.stringify(backup) })).status, 401);
+  const bad = await fetch(`${BASE}/api/restore`, { method: "POST", headers: admin, body: JSON.stringify({ data: { members: "x" } }) });
+  assert.equal(bad.status, 400);
+  const res = await fetch(`${BASE}/api/restore`, { method: "POST", headers: admin, body: JSON.stringify(backup) });
+  assert.equal(res.status, 200);
+  ({ data } = await (await fetch(`${BASE}/api/data`)).json());
+  assert.deepEqual(data, backup.data, "백업 시점과 똑같이 돌아온다");
+});
+
+test("캘린더 연결 목록은 자격증명 없이 보이고, 남의 연결은 해제 못 한다", async () => {
+  const r = await (await fetch(`${BASE}/api/calendar`)).json();
+  assert.deepEqual(r.enabled, { google: false, apple: true }, "구글 키 없으면 구글만 꺼짐");
+  assert.deepEqual(r.connections, []);
+  const d = await fetch(`${BASE}/api/calendar/disconnect`, { method: "POST", body: JSON.stringify({ id: "x", secret: "y" }) });
+  assert.equal(d.status, 403);
+  const g = await fetch(`${BASE}/api/calendar/google/start`, { method: "POST" });
+  assert.equal(g.status, 503);
+  const a = await fetch(`${BASE}/api/calendar/apple`, { method: "POST", body: JSON.stringify({ appleId: "a@b.c", appPassword: "short" }) });
+  assert.equal(a.status, 400);
+  assert.equal((await fetch(`${BASE}/api/calendar/reconcile`, { method: "POST" })).status, 401);
+  const rc = await (await fetch(`${BASE}/api/calendar/reconcile`, { method: "POST", headers: admin })).json();
+  assert.deepEqual(rc, { results: [], remaining: false });
 });

@@ -32,7 +32,9 @@ export type Op =
   | { kind: "equip.insert"; equipment: Equipment }
   | { kind: "equip.remove"; id: string }
   | { kind: "unavail.insert"; item: EquipmentUnavailable }
-  | { kind: "unavail.remove"; id: string };
+  | { kind: "unavail.remove"; id: string }
+  /** 백업에서 복구 — 전체를 바꾼다. 공개 POST 로는 받지 않고 /api/restore(비밀 토큰)만 쓴다 */
+  | { kind: "data.replace"; data: AppData };
 
 /**
  * Op 하나를 적용한 새 스냅샷을 돌려준다(원본은 건드리지 않음).
@@ -130,6 +132,8 @@ export function applyOp(d: AppData, op: Op): AppData {
     }
     case "unavail.remove":
       return { ...d, unavailable: d.unavailable.filter((u) => u.id !== op.id) };
+    case "data.replace":
+      return op.data;
   }
 }
 
@@ -158,8 +162,10 @@ const date = (v: unknown): v is string =>
   typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 const color = (v: unknown): v is string =>
   typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
-const list = (v: unknown): v is unknown[] =>
-  Array.isArray(v) && v.length <= MAX_ITEMS;
+const list = (v: unknown, max = MAX_ITEMS): v is unknown[] =>
+  Array.isArray(v) && v.length <= max;
+/** 복구할 때는 몇 년치가 쌓인 전체 목록을 받으므로 한도를 넉넉히 둔다 */
+const MAX_RESTORE_ITEMS = 200_000;
 
 const isMember = (v: unknown): v is Member =>
   isObj(v) && id(v.id) && str(v.name, 50) && (v.name as string).trim() !== "" &&
@@ -223,4 +229,19 @@ export function parseOp(v: unknown): Op | null {
     default:
       return null;
   }
+}
+
+/** 백업 파일의 데이터 모양이 올바르면 그대로, 아니면 null (복구 전용) */
+export function parseData(v: unknown): AppData | null {
+  if (!isObj(v)) return null;
+  const ok =
+    list(v.members, MAX_RESTORE_ITEMS) && v.members.every(isMember) &&
+    list(v.absences, MAX_RESTORE_ITEMS) && v.absences.every(isAbsence) &&
+    list(v.availability, MAX_RESTORE_ITEMS) && v.availability.every(isAvail) &&
+    list(v.assignments, MAX_RESTORE_ITEMS) && v.assignments.every(isAssign) &&
+    list(v.equipment, MAX_RESTORE_ITEMS) && v.equipment.every(isEquip) &&
+    list(v.unavailable, MAX_RESTORE_ITEMS) && v.unavailable.every(isUnavail);
+  if (!ok) return null;
+  const { members, absences, availability, assignments, equipment, unavailable } = v as unknown as AppData;
+  return { members, absences, availability, assignments, equipment, unavailable };
 }
