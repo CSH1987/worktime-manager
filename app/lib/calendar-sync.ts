@@ -180,8 +180,8 @@ export async function syncCalendars(
 
 /** 이 시간 안의 연속 변경은 한 번으로 합친다 */
 export const COALESCE_MS = 20_000;
-/** 변경 직후 동기화는 시간당 이 횟수까지만 (넘으면 매시 대조가 맡는다) */
-export const MAX_RUNS_PER_HOUR = Number(process.env.WORKTIME_SYNC_MAX_PER_HOUR || 30);
+/** 변경 직후 동기화는 시간당 이 횟수까지만 (넘으면 매시 대조가 맡는다). 12 = 평균 5분에 한 번 */
+export const MAX_RUNS_PER_HOUR = Number(process.env.WORKTIME_SYNC_MAX_PER_HOUR || 12);
 
 interface SyncState {
   lastRunAt: number;

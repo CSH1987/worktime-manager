@@ -46,7 +46,7 @@ WORKTIME_BLOB_STORE=worktime-test npx netlify-cli deploy --build
 **팀원 각자 자기 캘린더에서 모두의 일정을 봅니다.** 헤더의 **캘린더** → 구글 또는 애플 연결.
 연결하면 그 계정에 **‘팀 근태’ 캘린더**가 생기고, 앱 달력의 부재·잔업 확정·잔업 가능 후보·패밀리데이가 들어갑니다(지난 180일 ~ 앞으로 400일).
 
-- 앱에서 바꾸면 몇 초 안에 반영됩니다. 20초 안의 연속 변경은 한 번으로 합치고 시간당 30회까지만 바로 보내며, 나머지는 1시간마다 도는 대조(`netlify/functions/calendar-reconcile.mts`)가 반영합니다. 앱 → 캘린더 한 방향이라 캘린더에서 고친 것은 다음 대조 때 앱 내용으로 돌아갑니다(팀원이 손으로 넣은 다른 일정은 건드리지 않음).
+- 앱에서 바꾸면 몇 초 안에 반영됩니다. 20초 안의 연속 변경은 한 번으로 합치고 시간당 12회까지만 바로 보내며, 나머지는 1시간마다 도는 대조(`netlify/functions/calendar-reconcile.mts`)가 반영합니다. 앱 → 캘린더 한 방향이라 캘린더에서 고친 것은 다음 대조 때 앱 내용으로 돌아갑니다(팀원이 손으로 넣은 다른 일정은 건드리지 않음).
 - 팀원이 '팀 근태' 캘린더를 지우면 연결도 해제됩니다. 같은 계정으로 다시 연결하면 기존 캘린더를 그대로 씁니다. 연결은 최대 30개(`WORKTIME_MAX_CONNECTIONS`).
 - 악용·연타 방지: IP당 1분에 `/api/*` 120회, `/api/calendar/*` 20회(`netlify.toml`). 무료 요금제는 한도를 넘어도 요금이 붙지 않고 사이트가 멈추는 방식이라, 이 제한은 '멈춤'을 막기 위한 것입니다.
 - 버려진 연결 정리(관리자): `curl -X POST -H "Authorization: Bearer $WORKTIME_EXPORT_TOKEN" -d '{"id":"<연결id>"}' https://team-worktime.netlify.app/api/calendar/disconnect`
