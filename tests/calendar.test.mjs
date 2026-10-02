@@ -177,3 +177,19 @@ test("대량 삭제 막기: 앱 데이터가 크게 줄면 캘린더 이력을 �
   const p = planSync(desiredEvents(empty, TODAY), have);
   assert.equal(isMassDelete(p.remove.length, have.size), true);
 });
+
+test("해제 뒤 다시 연결하면 예전 '팀 근태' 캘린더를 이어 쓴다", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  process.env.WORKTIME_STORE = "file";
+  process.env.WORKTIME_DATA_DIR = path.join(mkdtempSync(path.join(tmpdir(), "wt-cal2-")), "worktime");
+  const { saveConnection, previousCalendar } = await import("../app/lib/calendar-http.ts");
+  const { accountHash, connections } = await import("../app/lib/calendar-store.ts");
+  const h = accountHash("google", "Someone@Gmail.com");
+  assert.equal(await previousCalendar(h), null);
+  const { id } = await saveConnection("google", "so***@gmail.com", h, { refreshToken: "x" }, "cal-123");
+  await connections().delete(id);
+  assert.equal(await connections().get(id), null);
+  assert.equal(await previousCalendar(accountHash("google", "someone@gmail.com")), "cal-123", "해제해도 캘린더 위치는 기억");
+});

@@ -13,6 +13,10 @@ const CAL_NAME = "팀 근태";
 export class ReauthError extends Error {
   name = "ReauthError";
 }
+/** 사용자가 구글 계정 설정에서 이 앱의 권한을 없앤 경우(invalid_grant) — 연결을 정리한다 */
+export class RevokedError extends ReauthError {
+  name = "RevokedError";
+}
 /** 앱이 만든 캘린더를 사용자가 지운 경우 */
 export class CalendarGoneError extends Error {
   name = "CalendarGoneError";
@@ -47,7 +51,7 @@ async function tokenCall(params: Record<string, string>) {
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, string>;
   if (!res.ok) {
-    if (body.error === "invalid_grant") throw new ReauthError("구글 연결이 취소되었거나 만료되었습니다.");
+    if (body.error === "invalid_grant") throw new RevokedError("구글 연결이 취소되었거나 만료되었습니다.");
     throw new Error(`구글 토큰 오류 ${res.status} ${body.error ?? ""}`.trim());
   }
   return body;

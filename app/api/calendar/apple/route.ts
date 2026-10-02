@@ -2,7 +2,7 @@
 //   POST /api/calendar/apple { appleId, appPassword } → { id, secret }
 import { appleCalendarExists, connectApple, verifyAppleLogin } from "../../../lib/calendar-apple";
 import { accountHash, appleEnabled, hasTokenKey, maskAccount } from "../../../lib/calendar-store";
-import { assertCapacity, json, sameAccount, saveConnection } from "../../../lib/calendar-http";
+import { assertCapacity, json, previousCalendar, saveConnection } from "../../../lib/calendar-http";
 
 export const dynamic = "force-dynamic";
 
@@ -19,11 +19,11 @@ export async function POST(request: Request) {
     const auth = { appleId, appPassword };
     const hash = accountHash("apple", appleId);
     await assertCapacity(hash);
-    const existing = await sameAccount(hash);
+    const existing = await previousCalendar(hash);
     // 재연결이어도 새 암호로 로그인되는지 먼저 확인하고, 옛 캘린더가 지워졌으면 새로 만든다
     await verifyAppleLogin(auth);
     const calUrl =
-      existing && (await appleCalendarExists(auth, existing.calendar)) ? existing.calendar : await connectApple(auth);
+      existing && (await appleCalendarExists(auth, existing)) ? existing : await connectApple(auth);
     return json(await saveConnection("apple", maskAccount(appleId), hash, auth, calUrl));
   } catch (e) {
     console.error(`[calendar] 애플 연결 실패: ${(e as Error).name}`);

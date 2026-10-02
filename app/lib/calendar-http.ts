@@ -2,13 +2,15 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   MAX_CONNECTIONS,
+  rememberCalendar,
+  rememberedCalendar,
   connections,
   encrypt,
   hashSecret,
   newId,
   type Connection,
   type Provider,
-} from "./calendar-store";
+} from "./calendar-store.ts";
 
 export const json = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -23,6 +25,11 @@ export class TooManyConnectionsError extends Error {
 /** 같은 계정의 기존 연결 (있으면 그 캘린더를 다시 써서 '팀 근태' 가 두 개 생기지 않게) */
 export async function sameAccount(hash: string): Promise<Connection | null> {
   return (await connections().list()).find((c) => c.accountHash === hash) ?? null;
+}
+
+/** 이 계정이 예전에 쓰던 '팀 근태' 캘린더 (지금 연결 → 해제했던 기록 순으로) */
+export async function previousCalendar(hash: string): Promise<string | null> {
+  return (await sameAccount(hash))?.calendar ?? (await rememberedCalendar(hash));
 }
 
 /** 새 연결을 받을 수 있는지 (같은 계정 재연결은 교체라 항상 허용) */
@@ -56,6 +63,7 @@ export async function saveConnection(
   };
   const old = await sameAccount(hash);
   await connections().set(c);
+  await rememberCalendar(hash, calendar);
   if (old) await connections().delete(old.id);
   return { id: c.id, secret };
 }

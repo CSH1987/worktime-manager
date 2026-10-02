@@ -208,6 +208,15 @@ export function connections() {
   };
 }
 
+/** 계정별 '팀 근태' 캘린더 위치 — 연결을 해제해도 남겨, 다시 연결하면 같은 캘린더를 이어 쓴다(자격증명 없음) */
+export async function rememberCalendar(hash: string, calendar: string) {
+  await calendarKV().set(`acct/${hash}`, { calendar });
+}
+export async function rememberedCalendar(hash: string): Promise<string | null> {
+  const v = (await calendarKV().get(`acct/${hash}`)) as { calendar?: string } | null;
+  return v?.calendar ?? null;
+}
+
 /** 전체 연결 수 상한 — 팀원 수 + 여유. 넘으면 새 연결을 받지 않는다(비용·악용 방지) */
 export const MAX_CONNECTIONS = Number(process.env.WORKTIME_MAX_CONNECTIONS || 30);
 

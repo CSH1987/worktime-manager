@@ -177,7 +177,7 @@ export default function CalendarConnect() {
     <>
       <button
         onClick={openModal}
-        className="rounded-full px-3 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 sm:px-3.5"
+        className="ml-1 rounded-full bg-linear-to-r from-emerald-500 to-sky-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm ring-2 ring-emerald-200 transition hover:brightness-110 sm:px-3.5"
       >
         📅 캘린더 연동
       </button>
@@ -247,6 +247,26 @@ export default function CalendarConnect() {
                 </li>
               ))}
             </ul>
+
+            <details className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <summary className="cursor-pointer font-semibold text-slate-700">연동 해제 방법과 해제하면 어떻게 되나요?</summary>
+              <div className="mt-2 space-y-1.5">
+                <p>
+                  <b>해제 방법</b> ① 연결했던 브라우저에서 위 목록의 <b>해제</b> 버튼을 누릅니다. ② 다른 기기라면 구글 계정 →
+                  보안 → 타사 앱 및 서비스 → &lsquo;팀 근태 캘린더&rsquo; → 액세스 삭제. 10분 안에 이 목록에서도 정리됩니다.
+                </p>
+                <p>
+                  <b>해제하면</b> 앞으로 바뀌는 내용이 더 이상 들어오지 않습니다. 이미 받은 &lsquo;팀 근태&rsquo; 캘린더와 일정(이력)은
+                  내 구글 캘린더에 <b>그대로 남습니다</b>.
+                </p>
+                <p>
+                  <b>완전히 지우려면</b> 구글 캘린더 → 설정 → &lsquo;팀 근태&rsquo; → 캘린더 삭제. (지우면 되살릴 수 없습니다)
+                </p>
+                <p>
+                  <b>다시 연결하면</b> 남아 있던 &lsquo;팀 근태&rsquo; 캘린더를 이어서 씁니다(두 개로 늘지 않음).
+                </p>
+              </div>
+            </details>
 
             <div className="mt-4 flex justify-end">
               <button disabled={busy} onClick={() => setOpen(false)} className={`${btn} text-slate-500 hover:bg-slate-100`}>

@@ -11,7 +11,7 @@
 import * as apple from "./calendar-apple.ts";
 import { desiredEvents, isMassDelete, planSync, seoulToday, type CalendarEvent, type CalendarPayload, type RemoteIndex } from "./calendar-events.ts";
 import * as google from "./calendar-google.ts";
-import { CalendarGoneError, ReauthError } from "./calendar-google.ts";
+import { CalendarGoneError, ReauthError, RevokedError } from "./calendar-google.ts";
 import { connections, decrypt, type AppleCreds, type Connection, type GoogleCreds } from "./calendar-store.ts";
 import { opLog } from "./server-store.ts";
 
@@ -164,6 +164,13 @@ export async function syncCalendars(
       if (r.firstError) console.error(`[calendar] 연결 ${c.id} 일정 ${r.failed}건 실패: ${(r.firstError as Error).name}`);
       results.push({ id: c.id, done, sent: r.sent, failed: r.failed, remaining: r.remaining });
     } catch (e) {
+      if (e instanceof RevokedError) {
+        // 팀원이 구글 계정 설정에서 권한을 없앴다 = 연동 해제 → 기록 정리(캘린더와 일정은 그 계정에 남음)
+        await removeConnection(c);
+        console.error(`[calendar] 연결 ${c.id}: 구글 권한이 취소되어 연결을 정리함`);
+        results.push({ id: c.id, done: true, sent: 0, failed: 0, remaining: 0, removed: true });
+        continue;
+      }
       if (e instanceof CalendarGoneError) {
         // 팀원이 '팀 근태' 캘린더를 지웠다 = 그만 받겠다는 뜻 → 연결 해제 (다시 만들지 않음)
         await removeConnection(c);

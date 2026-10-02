@@ -2,7 +2,7 @@
 // 끝나면 /#cal=<id>.<secret> 로 보내 브라우저가 해제 비밀키를 보관하게 한다.
 import { calendarExists, createCalendar, exchangeCode } from "../../../../lib/calendar-google";
 import { accountHash, maskAccount, verify } from "../../../../lib/calendar-store";
-import { assertCapacity, publicBase, sameAccount, saveConnection } from "../../../../lib/calendar-http";
+import { assertCapacity, previousCalendar, publicBase, saveConnection } from "../../../../lib/calendar-http";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
     await assertCapacity(hash);
     // 같은 계정을 다시 연결하면 기존 '팀 근태' 캘린더를 그대로 쓴다(캘린더가 두 개 생기지 않게).
     // 단 그 캘린더가 지워졌으면 새로 만든다.
-    const old = (await sameAccount(hash))?.calendar;
+    const old = await previousCalendar(hash);
     const calendarId =
       old && (await calendarExists(t.accessToken, old)) ? old : await createCalendar(t.accessToken);
     const { id, secret } = await saveConnection("google", maskAccount(t.email), hash, { refreshToken: t.refreshToken }, calendarId);
