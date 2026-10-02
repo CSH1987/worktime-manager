@@ -76,7 +76,7 @@ export default function CalendarConnect() {
           break;
         }
         if (r.done) {
-          setMsg("연결 완료 — 이제 내 캘린더의 '팀 근태'에서 모두의 일정을 볼 수 있습니다.");
+          setMsg("연결 완료 — 이제 내 캘린더의 '팀 근태'에서 모두의 일정을 볼 수 있습니다. 앞으로 바뀌는 내용은 10분마다 자동 반영됩니다.");
           break;
         }
         setMsg(`캘린더에 일정을 채우는 중… (남은 ${r.remaining}건)`);
@@ -188,6 +188,7 @@ export default function CalendarConnect() {
             <h2 className="text-base font-bold text-slate-900">내 캘린더에서 팀 일정 보기</h2>
             <p className="mt-1 text-sm text-slate-500">
               연결하면 내 계정에 &lsquo;팀 근태&rsquo; 캘린더가 생기고, 앱 달력의 부재·잔업·패밀리데이가 자동으로 들어갑니다.
+              앱에서 바꾼 내용은 <b>10분마다 자동으로</b> 캘린더에 반영됩니다(내 컴퓨터·휴대폰이 꺼져 있어도 됩니다).
               사이트에 문제가 생겨도 이 캘린더의 일정(이력)은 내 계정에 그대로 남습니다.
             </p>
 
