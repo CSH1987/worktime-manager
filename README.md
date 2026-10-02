@@ -52,7 +52,7 @@ WORKTIME_BLOB_STORE=worktime-test npx netlify-cli deploy --build
 - 일정마다 원본 기록이 숨겨져 있어 캘린더에서도 복구할 수 있습니다(`scripts/restore.mjs --from-calendar <연결id>`).
 - 자격증명은 별도 Blobs 저장소(`worktime-calendar`)에 AES-GCM 으로 암호화해 둡니다.
 
-**매일 백업** — 비공개 레포 `worktime-backup` 의 GitHub Actions 가 매일 03:00(KST) `/api/export` 를 받아 커밋합니다. 틀은 `ops/worktime-backup/`.
+**매일 백업** — 이 레포의 GitHub Actions(`.github/workflows/daily-backup.yml`)가 매일 03:00(KST) `/api/export` 를 받아 **`backups` 브랜치**에 날짜별로 커밋합니다(별도 레포 없음). 레포가 공개면 데이터가 보이므로 이 작업은 **비공개 레포에서만** 돌고, 공개면 실패로 멈춥니다.
 복구: `WORKTIME_EXPORT_TOKEN=... node scripts/restore.mjs <백업.json> [--yes]` (`--yes` 없으면 건수만 확인). 복구는 변경 1건으로 기록돼 복구 직전 상태도 남습니다.
 
 필요한 환경변수(키 이름·발급처)는 `.env.local.example` 참고. 키가 없으면 해당 기능만 꺼지고 앱은 그대로 동작합니다.
