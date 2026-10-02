@@ -18,6 +18,28 @@ import type {
 export const PAST_DAYS = 180;
 export const FUTURE_DAYS = 400;
 
+/** 캘린더에 올리는 날짜 범위 */
+export function windowOf(today: string) {
+  return { from: addDaysKey(today, -PAST_DAYS), to: addDaysKey(today, FUTURE_DAYS) };
+}
+
+/**
+ * 캘린더로 복구할 때 쓸 바탕 — 지금 데이터에서 "캘린더에 올라가지 않는 기록"
+ * (범위 밖·지금 팀원 목록에 없는 팀원)은 그대로 두고, 캘린더가 대신할 기록만 비운다.
+ */
+export function restoreBase(current: AppData, today: string): AppData {
+  const { from, to } = windowOf(today);
+  const members = new Set(current.members.map((m) => m.id));
+  const onCalendar = (memberId: string, start: string, end: string) =>
+    members.has(memberId) && end >= from && start <= to;
+  return {
+    ...current,
+    absences: current.absences.filter((a) => !onCalendar(a.memberId, a.startDate, a.endDate)),
+    availability: current.availability.filter((v) => !onCalendar(v.memberId, v.date, v.date)),
+    assignments: current.assignments.filter((s) => !onCalendar(s.memberId, s.date, s.date)),
+  };
+}
+
 export type CalendarPayload =
   | { kind: "absence"; absence: Absence; memberName: string }
   | { kind: "assignment"; assignment: OvertimeAssignment; memberName: string }
@@ -63,8 +85,7 @@ function make(
  * 범위와 겹치는 일정만 만든다.
  */
 export function desiredEvents(d: AppData, today: string): CalendarEvent[] {
-  const from = addDaysKey(today, -PAST_DAYS);
-  const to = addDaysKey(today, FUTURE_DAYS);
+  const { from, to } = windowOf(today);
   const nameOf = new Map(d.members.map((m) => [m.id, m.name]));
   const memberName = (id: string) => nameOf.get(id) ?? "(삭제된 팀원)";
   const out: CalendarEvent[] = [];

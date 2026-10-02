@@ -1,8 +1,8 @@
 // 애플 연결 — Apple ID + 앱 전용 암호로 로그인 확인 후 '팀 근태' 캘린더를 만든다
 //   POST /api/calendar/apple { appleId, appPassword } → { id, secret }
-import { connectApple } from "../../../lib/calendar-apple";
-import { hasTokenKey, maskAccount } from "../../../lib/calendar-store";
-import { json, saveConnection } from "../../../lib/calendar-http";
+import { connectApple, verifyAppleLogin } from "../../../lib/calendar-apple";
+import { accountHash, hasTokenKey, maskAccount } from "../../../lib/calendar-store";
+import { assertCapacity, json, sameAccount, saveConnection } from "../../../lib/calendar-http";
 
 export const dynamic = "force-dynamic";
 
@@ -16,8 +16,12 @@ export async function POST(request: Request) {
   }
   try {
     const auth = { appleId, appPassword };
-    const calUrl = await connectApple(auth);
-    return json(await saveConnection("apple", maskAccount(appleId), auth, calUrl));
+    const hash = accountHash("apple", appleId);
+    await assertCapacity(hash);
+    const existing = await sameAccount(hash);
+    // 재연결이어도 새 암호로 로그인되는지 먼저 확인한다
+    const calUrl = existing ? (await verifyAppleLogin(auth), existing.calendar) : await connectApple(auth);
+    return json(await saveConnection("apple", maskAccount(appleId), hash, auth, calUrl));
   } catch (e) {
     console.error(`[calendar] 애플 연결 실패: ${(e as Error).name}`);
     return json({ error: (e as Error).message.slice(0, 200) }, 400);

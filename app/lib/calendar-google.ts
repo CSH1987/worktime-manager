@@ -95,13 +95,28 @@ export async function createCalendar(access: string): Promise<string> {
   return ((await res.json()) as { id: string }).id;
 }
 
-/* 원본 기록은 비공개 확장 속성에 1000자씩 나눠 싣는다(값 하나의 한도 1024자) */
+/* 원본 기록은 비공개 확장 속성에 나눠 싣는다(값 하나의 한도 1024자) */
 const CHUNK = 1000;
 
+/** 글자(코드포인트) 단위로 자른다 — 이모지 같은 서로게이트 쌍이 둘로 갈라지지 않게 */
+export function chunkText(s: string, size = CHUNK): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const ch of s) {
+    if (cur.length + ch.length > size) {
+      out.push(cur);
+      cur = "";
+    }
+    cur += ch;
+  }
+  if (cur || !out.length) out.push(cur);
+  return out;
+}
+
 function toGoogle(e: CalendarEvent) {
-  const data = JSON.stringify(e.payload);
-  const props: Record<string, string> = { wt: "1", wtHash: e.hash, wtParts: String(Math.ceil(data.length / CHUNK)) };
-  for (let i = 0; i * CHUNK < data.length; i++) props[`wtData${i}`] = data.slice(i * CHUNK, (i + 1) * CHUNK);
+  const parts = chunkText(JSON.stringify(e.payload));
+  const props: Record<string, string> = { wt: "1", wtHash: e.hash, wtParts: String(parts.length) };
+  parts.forEach((p, i) => (props[`wtData${i}`] = p));
   return {
     id: e.uid,
     summary: e.title,

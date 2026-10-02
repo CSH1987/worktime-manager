@@ -11,3 +11,23 @@
 # 조건부 쓰기가 동작하지 않는다 → 로컬 실행은 파일 저장소를 쓴다.
 [context.dev.environment]
   WORKTIME_STORE = "file"
+
+# 악용·실수 연타 방지 — IP 하나가 1분에 보낼 수 있는 요청 수 (무료 요금제는 규칙 2개까지)
+# 넘으면 429. 사이트가 멈추는 원인(월 300크레딧 소진)을 막기 위한 것.
+[[redirects]]
+  from = "/api/calendar/*"
+  to = "/api/calendar/:splat"
+  status = 200
+  [redirects.rate_limit]
+    window_limit = 20
+    window_size = 60
+    aggregate_by = ["ip", "domain"]
+
+[[redirects]]
+  from = "/api/*"
+  to = "/api/:splat"
+  status = 200
+  [redirects.rate_limit]
+    window_limit = 120
+    window_size = 60
+    aggregate_by = ["ip", "domain"]

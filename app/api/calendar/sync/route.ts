@@ -8,6 +8,6 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   const c = await ownedConnection(request);
   if (!c) return json({ error: "이 브라우저에서 만든 연결이 아닙니다." }, 403);
-  const [r] = await syncCalendars({ onlyId: c.id, force: true, budgetMs: 8_000 });
+  const [r] = await syncCalendars({ onlyId: c.id, mode: "full", budgetMs: 8_000 });
   return json(r ?? { done: true, remaining: 0 });
 }

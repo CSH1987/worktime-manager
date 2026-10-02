@@ -123,4 +123,6 @@ test("캘린더 연결 목록은 자격증명 없이 보이고, 남의 연결은
   assert.equal((await fetch(`${BASE}/api/calendar/reconcile`, { method: "POST" })).status, 401);
   const rc = await (await fetch(`${BASE}/api/calendar/reconcile`, { method: "POST", headers: admin })).json();
   assert.deepEqual(rc, { results: [], remaining: false });
+  const ad = await fetch(`${BASE}/api/calendar/disconnect`, { method: "POST", headers: admin, body: JSON.stringify({ id: "none" }) });
+  assert.equal(ad.status, 404, "관리자 해제는 토큰으로 되고, 없는 연결은 404");
 });

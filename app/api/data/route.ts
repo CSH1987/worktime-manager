@@ -3,7 +3,7 @@
 //   GET  /api/data?since=<v>  → 바뀐 게 없으면 { unchanged: true, version }
 //   POST /api/data  { op }    → Op 적용 후 { data, version }
 import { after } from "next/server";
-import { syncCalendars } from "../../lib/calendar-sync";
+import { requestSync } from "../../lib/calendar-sync";
 import { hasTokenKey } from "../../lib/calendar-store";
 import { parseOp } from "../../lib/ops";
 import { opLog } from "../../lib/server-store";
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     // 응답은 바로 주고, 연결된 캘린더는 그 뒤에 맞춘다(실패해도 1시간마다 전체 대조가 다시 맞춤)
     if (hasTokenKey()) {
       after(() =>
-        syncCalendars({ budgetMs: 15_000 }).catch((e) =>
+        requestSync().catch((e) =>
           console.error(`[calendar] 변경 직후 동기화 실패: ${(e as Error).name}`),
         ),
       );

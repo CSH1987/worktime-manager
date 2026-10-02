@@ -9,6 +9,8 @@ import { ReauthError, CalendarGoneError } from "./calendar-google.ts";
 
 const ROOT = "https://caldav.icloud.com/";
 const CAL_NAME = "팀 근태";
+/** 이 앱이 만든 일정 uid 모양 (calendar-events.ts eventUid) */
+const APP_UID = /^tm[0-9a-f]{40}$/;
 
 export interface AppleAuth {
   appleId: string;
@@ -59,12 +61,17 @@ async function propfind(a: AppleAuth, url: string, prop: string, depth = "0") {
   return res.text();
 }
 
-/** 로그인 확인 + '팀 근태' 캘린더 만들기 → 캘린더 URL */
-export async function connectApple(a: AppleAuth): Promise<string> {
+/** 로그인 확인 → 계정 주소 */
+export async function verifyAppleLogin(a: AppleAuth): Promise<string> {
   const p1 = await propfind(a, ROOT, "<d:current-user-principal/>");
   const principal = tagValues(tagValues(p1, "current-user-principal")[0] ?? "", "href")[0];
   if (!principal) throw new Error("애플 계정 정보를 찾지 못했습니다.");
-  const principalUrl = absolute(principal, ROOT);
+  return absolute(principal, ROOT);
+}
+
+/** 로그인 확인 + '팀 근태' 캘린더 만들기 → 캘린더 URL */
+export async function connectApple(a: AppleAuth): Promise<string> {
+  const principalUrl = await verifyAppleLogin(a);
   const p2 = await propfind(a, principalUrl, "<c:calendar-home-set/>");
   const home = tagValues(tagValues(p2, "calendar-home-set")[0] ?? "", "href")[0];
   if (!home) throw new Error("애플 캘린더 위치를 찾지 못했습니다.");
@@ -76,7 +83,14 @@ export async function connectApple(a: AppleAuth): Promise<string> {
 }
 
 /* ---------- iCalendar 글자 만들기 ---------- */
-const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+/** 텍스트 값 이스케이프 — 줄바꿈(\r\n·\r·\n)은 \n 으로, 나머지 제어문자는 지워 속성 주입을 막는다 */
+const esc = (s: string) =>
+  s
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r\n|\r|\n/g, "\\n")
+    .replace(/[\u0000-\u001f\u007f]/g, "");
 const icsDate = (key: string) => key.replace(/-/g, "");
 
 /** 75바이트마다 접기 (RFC 5545) — 한글이 잘리지 않게 글자 단위로 */
@@ -152,7 +166,8 @@ export async function listApple(a: AppleAuth, calUrl: string, withPayload = fals
     if (!href || !data) continue;
     const ics = decodeXml(data);
     const uid = icsProp(ics, "UID");
-    if (!uid) continue;
+    // 이 앱이 올린 일정만 다룬다 — 팀원이 이 캘린더에 손으로 넣은 일정은 건드리지 않음
+    if (!uid || !APP_UID.test(uid)) continue;
     index.set(uid, { hash: icsProp(ics, "X-WT-HASH") ?? "", ref: absolute(href, calUrl) });
     if (withPayload) {
       const p = payloadFromIcs(ics);

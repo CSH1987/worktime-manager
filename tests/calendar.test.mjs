@@ -116,3 +116,52 @@ test("자격증명 암호화·서명·계정 가리기", () => {
   assert.equal(verify(sign({ n: "x" }, -1)), null, "만료 거부");
   assert.equal(maskAccount("choisooha87@gmail.com"), "ch***@gmail.com");
 });
+
+import { chunkText } from "../app/lib/calendar-google.ts";
+import { admitRun, COALESCE_MS, MAX_RUNS_PER_HOUR } from "../app/lib/calendar-sync.ts";
+import { restoreBase } from "../app/lib/calendar-events.ts";
+
+test("구글 조각 나누기는 이모지를 둘로 가르지 않는다", () => {
+  const s = "가".repeat(999) + "😀" + "끝";
+  const parts = chunkText(s, 1000);
+  assert.equal(parts.join(""), s);
+  for (const p of parts) {
+    assert.ok(p.length <= 1000);
+    assert.ok(!/[\uD800-\uDBFF]$/.test(p), "조각 끝에 짝 잃은 서로게이트 없음");
+  }
+});
+
+test("ics: 단독 CR·제어문자로 속성을 끼워 넣을 수 없다", () => {
+  const e = desiredEvents(base(), TODAY).find((x) => x.title === "가 · 연차");
+  const evil = { ...e, title: "x\rATTENDEE:mailto:a@b.c", description: "y\u0000\u0007z" };
+  const ics = toIcs(evil);
+  assert.ok(!/\r\nATTENDEE/.test(ics) && !ics.includes("\rATTENDEE"), "새 속성 줄이 생기지 않음");
+  assert.ok(ics.includes(String.raw`SUMMARY:x\nATTENDEE:mailto:a@b.c`));
+  assert.ok(ics.includes("DESCRIPTION:yz"));
+});
+
+test("변경 직후 동기화: 20초 안의 연속 변경은 합치고, 시간당 상한을 지킨다", () => {
+  const t0 = Date.UTC(2026, 9, 2, 10, 0, 0);
+  let r = admitRun(null, t0);
+  assert.equal(r.run, true);
+  assert.equal(admitRun(r.next, t0 + COALESCE_MS - 1).run, false, "20초 안은 합침");
+  let st = r.next;
+  let runs = 1;
+  for (let t = t0 + COALESCE_MS; t < t0 + 3600_000 - 1; t += COALESCE_MS) {
+    r = admitRun(st, t);
+    if (r.run) runs++;
+    st = r.next;
+  }
+  assert.equal(runs, MAX_RUNS_PER_HOUR, "한 시간에 상한만큼만");
+  assert.equal(admitRun(st, t0 + 3600_000 + COALESCE_MS).run, true, "다음 시간에는 다시 허용");
+});
+
+test("캘린더 복구 바탕: 범위 밖·지금 없는 팀원 기록은 남기고 범위 안만 비운다", () => {
+  const d = base();
+  d.absences.push({ id: "ghost", memberId: "zz", startDate: "2026-10-05", endDate: "2026-10-05", type: "etc", label: "", memo: "" });
+  const b = restoreBase(d, TODAY);
+  assert.deepEqual(b.absences.map((a) => a.id).sort(), ["ghost", "old"]);
+  assert.equal(b.assignments.length, 0);
+  const back = dataFromPayloads(desiredEvents(d, TODAY).map((e) => e.payload), b);
+  assert.deepEqual(back.absences.map((a) => a.id).sort(), ["ab1", "ghost", "old"], "복구 뒤 아무것도 잃지 않음");
+});

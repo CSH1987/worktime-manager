@@ -25,12 +25,18 @@ export interface Connection {
   enc: string;
   /** 구글: 캘린더 id / 애플: 캘린더 URL */
   calendar: string;
+  /** 같은 계정 재연결 판별 (sha256) */
+  accountHash?: string;
   status: {
     lastOkAt?: string;
     lastError?: string;
     failures: number;
     /** 마지막으로 다 맞춘 데이터 버전 — 같으면 변경 직후 동기화를 건너뛴다 */
     syncedVersion?: string;
+    /** 마지막으로 동기화를 시도한 시각(ms) — 예약 대조는 오래된 연결부터 */
+    lastCheckedAt?: number;
+    /** 마지막 '전체 강제 대조' 시각(ms) — 하루 1번이면 충분 */
+    lastFullAt?: number;
   };
 }
 
@@ -87,66 +93,58 @@ export function maskAccount(account: string): string {
 }
 
 /* ---------- 저장소 (Netlify Blobs, 밖에서는 로컬 폴더) ---------- */
-interface ConnKV {
-  get(id: string): Promise<Connection | null>;
-  set(c: Connection): Promise<void>;
-  delete(id: string): Promise<void>;
-  list(): Promise<Connection[]>;
+interface RawKV {
+  get(key: string): Promise<unknown | null>;
+  set(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<void>;
+  keys(prefix: string): Promise<string[]>;
 }
 
 const STORE_NAME = `${process.env.WORKTIME_BLOB_STORE || "worktime"}-calendar`;
 
-function blobs(): ConnKV {
+function blobs(): RawKV {
   const store = () => getStore({ name: STORE_NAME, consistency: "strong" });
   return {
-    get: async (id) => (await store().get(PREFIX + id, { type: "json" })) as Connection | null,
-    set: async (c) => {
-      await store().setJSON(PREFIX + c.id, c);
+    get: (key) => store().get(key, { type: "json" }),
+    set: async (key, value) => {
+      await store().setJSON(key, value);
     },
-    delete: (id) => store().delete(PREFIX + id),
-    async list() {
-      const out: Connection[] = [];
-      for await (const page of store().list({ prefix: PREFIX, paginate: true })) {
-        for (const b of page.blobs) {
-          const c = (await store().get(b.key, { type: "json" })) as Connection | null;
-          if (c) out.push(c);
-        }
-      }
+    delete: (key) => store().delete(key),
+    async keys(prefix) {
+      const out: string[] = [];
+      for await (const page of store().list({ prefix, paginate: true })) for (const b of page.blobs) out.push(b.key);
       return out;
     },
   };
 }
 
-function files(): ConnKV {
+function files(): RawKV {
   const dir = path.join(
     /*turbopackIgnore: true*/ process.env.WORKTIME_DATA_DIR ?? path.join(/*turbopackIgnore: true*/ process.cwd(), ".data", "worktime"),
     "..",
     "worktime-calendar",
   );
-  const file = (id: string) => path.join(/*turbopackIgnore: true*/ dir, `${encodeURIComponent(id)}.json`);
+  const file = (key: string) => path.join(/*turbopackIgnore: true*/ dir, encodeURIComponent(key));
   return {
-    async get(id) {
+    async get(key) {
       try {
-        return JSON.parse(await fs.readFile(/*turbopackIgnore: true*/ file(id), "utf8"));
+        return JSON.parse(await fs.readFile(/*turbopackIgnore: true*/ file(key), "utf8"));
       } catch {
         return null;
       }
     },
-    async set(c) {
+    async set(key, value) {
       await fs.mkdir(/*turbopackIgnore: true*/ dir, { recursive: true });
-      await fs.writeFile(/*turbopackIgnore: true*/ file(c.id), JSON.stringify(c));
+      const tmp = `${file(key)}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+      await fs.writeFile(/*turbopackIgnore: true*/ tmp, JSON.stringify(value));
+      await fs.rename(/*turbopackIgnore: true*/ tmp, file(key));
     },
-    async delete(id) {
-      await fs.rm(/*turbopackIgnore: true*/ file(id), { force: true });
+    async delete(key) {
+      await fs.rm(/*turbopackIgnore: true*/ file(key), { force: true });
     },
-    async list() {
+    async keys(prefix) {
       const names = await fs.readdir(/*turbopackIgnore: true*/ dir).catch(() => [] as string[]);
-      const out: Connection[] = [];
-      for (const n of names) {
-        const c = await this.get(decodeURIComponent(n.replace(/\.json$/, "")));
-        if (c) out.push(c);
-      }
-      return out;
+      return names.filter((n) => !n.endsWith(".tmp")).map(decodeURIComponent).filter((k) => k.startsWith(prefix));
     },
   };
 }
@@ -162,11 +160,43 @@ function blobsAvailable(): boolean {
   }
 }
 
-let kv: ConnKV | null = null;
-export function connections(): ConnKV {
-  kv ??= blobsAvailable() ? blobs() : files();
-  return kv;
+let raw: RawKV | null = null;
+export function calendarKV(): RawKV {
+  raw ??= blobsAvailable() ? blobs() : files();
+  return raw;
 }
+
+export function connections() {
+  const kv = calendarKV();
+  return {
+    get: async (id: string) => (await kv.get(PREFIX + id)) as Connection | null,
+    set: (c: Connection) => kv.set(PREFIX + c.id, c),
+    delete: (id: string) => kv.delete(PREFIX + id),
+    async list(): Promise<Connection[]> {
+      const keys = await kv.keys(PREFIX);
+      const all = await Promise.all(keys.map((k) => kv.get(k) as Promise<Connection | null>));
+      return all.filter((c): c is Connection => Boolean(c));
+    },
+    /**
+     * 최신 값을 다시 읽어 바꿀 부분만 고쳐 쓴다 — 동시에 돈 동기화가 서로의 결과를
+     * 옛 값으로 덮지 않게. 그사이 해제됐으면 되살리지 않고 null.
+     */
+    async update(id: string, change: (latest: Connection) => void): Promise<Connection | null> {
+      const latest = (await kv.get(PREFIX + id)) as Connection | null;
+      if (!latest) return null;
+      change(latest);
+      await kv.set(PREFIX + id, latest);
+      return latest;
+    },
+  };
+}
+
+/** 전체 연결 수 상한 — 팀원 수 + 여유. 넘으면 새 연결을 받지 않는다(비용·악용 방지) */
+export const MAX_CONNECTIONS = Number(process.env.WORKTIME_MAX_CONNECTIONS || 30);
+
+/** 같은 계정 판별용 지문 (계정 원문은 저장하지 않음) */
+export const accountHash = (provider: Provider, account: string) =>
+  createHash("sha256").update(`${provider}:${account.trim().toLowerCase()}`).digest("hex");
 
 /** 화면에 보낼 모양 — 자격증명·비밀키 지문은 빼고 */
 export function publicView(c: Connection) {

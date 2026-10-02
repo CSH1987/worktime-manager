@@ -142,11 +142,17 @@ export default function CalendarConnect() {
     const secret = owned[id];
     if (!secret) return;
     setBusy(true);
-    await fetch("/api/calendar/disconnect", {
+    const res = await fetch("/api/calendar/disconnect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, secret }),
-    }).catch(() => {});
+    }).catch(() => null);
+    // 서버가 해제를 확인했을 때만 이 브라우저의 비밀키를 지운다(실패하면 다시 시도할 수 있게)
+    if (!res?.ok && res?.status !== 403) {
+      setMsg("해제하지 못했습니다. 잠시 뒤 다시 눌러 주세요.");
+      setBusy(false);
+      return;
+    }
     const next = { ...owned };
     delete next[id];
     writeOwned(next);
