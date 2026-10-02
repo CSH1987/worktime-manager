@@ -41,6 +41,7 @@ export interface Connection {
 }
 
 const PREFIX = "conn/";
+const GONE = "gone/";
 
 function keyBytes(): Buffer {
   const raw = process.env.WORKTIME_TOKEN_KEY;
@@ -171,7 +172,11 @@ export function connections() {
   return {
     get: async (id: string) => (await kv.get(PREFIX + id)) as Connection | null,
     set: (c: Connection) => kv.set(PREFIX + c.id, c),
-    delete: (id: string) => kv.delete(PREFIX + id),
+    /** 해제 — 지움 표시(gone/)를 먼저 남겨, 그 순간 돌던 동기화가 옛 기록을 되살리지 못하게 한다 */
+    async delete(id: string) {
+      await kv.set(GONE + id, { at: Date.now() });
+      await kv.delete(PREFIX + id);
+    },
     async list(): Promise<Connection[]> {
       const keys = await kv.keys(PREFIX);
       const all = await Promise.all(keys.map((k) => kv.get(k) as Promise<Connection | null>));
@@ -183,9 +188,14 @@ export function connections() {
      */
     async update(id: string, change: (latest: Connection) => void): Promise<Connection | null> {
       const latest = (await kv.get(PREFIX + id)) as Connection | null;
-      if (!latest) return null;
+      if (!latest || (await kv.get(GONE + id))) return null;
       change(latest);
       await kv.set(PREFIX + id, latest);
+      // 쓰는 사이 해제됐으면 방금 쓴 것을 다시 지운다
+      if (await kv.get(GONE + id)) {
+        await kv.delete(PREFIX + id);
+        return null;
+      }
       return latest;
     },
   };

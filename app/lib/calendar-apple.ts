@@ -31,7 +31,8 @@ async function dav(a: AppleAuth, method: string, url: string, body?: string, hea
     body,
     redirect: "follow",
   });
-  if (res.status === 401 || res.status === 403) {
+  // 로그인 실패는 401 만. 403·409 는 일정 하나에 대한 거절일 수 있어 여기서 연결 전체 실패로 보지 않는다
+  if (res.status === 401) {
     throw new ReauthError("애플 계정 로그인 실패 — Apple ID 와 앱 전용 암호를 확인해 주세요.");
   }
   return res;
@@ -151,6 +152,12 @@ export function payloadFromIcs(ics: string): CalendarPayload | null {
   }
 }
 
+/** 캘린더가 아직 있는지 (재연결 때 지워진 캘린더를 다시 쓰지 않게) */
+export async function appleCalendarExists(a: AppleAuth, calUrl: string): Promise<boolean> {
+  const res = await dav(a, "PROPFIND", calUrl, `<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>`, { Depth: "0" });
+  return res.ok || res.status === 207;
+}
+
 /** 캘린더의 일정 전부 (uid → 지문, ref=일정 URL) */
 export async function listApple(a: AppleAuth, calUrl: string, withPayload = false) {
   const body = `<?xml version="1.0" encoding="utf-8"?><c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>`;
@@ -180,7 +187,7 @@ export async function listApple(a: AppleAuth, calUrl: string, withPayload = fals
 export async function putApple(a: AppleAuth, calUrl: string, e: CalendarEvent, ref?: string) {
   const url = ref ?? `${calUrl}${e.uid}.ics`;
   const res = await dav(a, "PUT", url, toIcs(e));
-  if (res.status === 404 || res.status === 409) throw new CalendarGoneError("팀 근태 캘린더가 지워졌습니다.");
+  // 캘린더가 없어졌는지는 목록(REPORT)의 404 로만 판단한다 — 여기서는 이 일정 하나의 실패
   if (!res.ok) throw new Error(`애플 일정 저장 실패 ${res.status}`);
 }
 

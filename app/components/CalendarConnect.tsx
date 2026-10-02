@@ -42,7 +42,7 @@ export default function CalendarConnect() {
   const [applePw, setApplePw] = useState("");
 
   const load = useCallback(async () => {
-    const r = await fetch("/api/calendar", { cache: "no-store" }).then((x) => x.json()).catch(() => null);
+    const r = await fetch("/api/calendar/list", { cache: "no-store" }).then((x) => x.json()).catch(() => null);
     if (r) {
       setEnabled(r.enabled);
       setList(r.connections);
@@ -54,7 +54,7 @@ export default function CalendarConnect() {
     async (id: string, secret: string) => {
       setBusy(true);
       setMsg("캘린더에 일정을 채우는 중…");
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 15; i++) {
         const r = await fetch("/api/calendar/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -64,6 +64,14 @@ export default function CalendarConnect() {
           .catch(() => ({ error: "네트워크 오류" }));
         if (r.error) {
           setMsg(`채우기 실패: ${r.error}`);
+          break;
+        }
+        if (r.removed) {
+          setMsg("캘린더를 찾지 못해 연결이 해제됐습니다. 다시 연결해 주세요.");
+          break;
+        }
+        if (r.failed > 0 && r.remaining === 0) {
+          setMsg(`일정 ${r.failed}건을 보내지 못했습니다 — 10분마다 자동으로 다시 시도합니다. 나머지는 캘린더에 들어갔습니다.`);
           break;
         }
         if (r.done) {

@@ -1,6 +1,6 @@
 // 구글 동의 후 돌아오는 곳 → 갱신 토큰 받기 → '팀 근태' 캘린더 만들기 → 연결 저장
 // 끝나면 /#cal=<id>.<secret> 로 보내 브라우저가 해제 비밀키를 보관하게 한다.
-import { createCalendar, exchangeCode } from "../../../../lib/calendar-google";
+import { calendarExists, createCalendar, exchangeCode } from "../../../../lib/calendar-google";
 import { accountHash, maskAccount, verify } from "../../../../lib/calendar-store";
 import { assertCapacity, sameAccount, saveConnection } from "../../../../lib/calendar-http";
 
@@ -22,8 +22,11 @@ export async function GET(request: Request) {
     const t = await exchangeCode(code, state.r);
     const hash = accountHash("google", t.email);
     await assertCapacity(hash);
-    // 같은 계정을 다시 연결하면 기존 '팀 근태' 캘린더를 그대로 쓴다(캘린더가 두 개 생기지 않게)
-    const calendarId = (await sameAccount(hash))?.calendar ?? (await createCalendar(t.accessToken));
+    // 같은 계정을 다시 연결하면 기존 '팀 근태' 캘린더를 그대로 쓴다(캘린더가 두 개 생기지 않게).
+    // 단 그 캘린더가 지워졌으면 새로 만든다.
+    const old = (await sameAccount(hash))?.calendar;
+    const calendarId =
+      old && (await calendarExists(t.accessToken, old)) ? old : await createCalendar(t.accessToken);
     const { id, secret } = await saveConnection("google", maskAccount(t.email), hash, { refreshToken: t.refreshToken }, calendarId);
     const res = back(request, `#cal=${id}.${secret}`);
     return res;

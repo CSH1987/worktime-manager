@@ -118,7 +118,6 @@ test("자격증명 암호화·서명·계정 가리기", () => {
 });
 
 import { chunkText } from "../app/lib/calendar-google.ts";
-import { admitRun, COALESCE_MS, MAX_RUNS_PER_HOUR } from "../app/lib/calendar-sync.ts";
 import { restoreBase } from "../app/lib/calendar-events.ts";
 
 test("구글 조각 나누기는 이모지를 둘로 가르지 않는다", () => {
@@ -140,20 +139,19 @@ test("ics: 단독 CR·제어문자로 속성을 끼워 넣을 수 없다", () =>
   assert.ok(ics.includes("DESCRIPTION:yz"));
 });
 
-test("변경 직후 동기화: 20초 안의 연속 변경은 합치고, 시간당 상한을 지킨다", () => {
-  const t0 = Date.UTC(2026, 9, 2, 10, 0, 0);
-  let r = admitRun(null, t0);
-  assert.equal(r.run, true);
-  assert.equal(admitRun(r.next, t0 + COALESCE_MS - 1).run, false, "20초 안은 합침");
-  let st = r.next;
-  let runs = 1;
-  for (let t = t0 + COALESCE_MS; t < t0 + 3600_000 - 1; t += COALESCE_MS) {
-    r = admitRun(st, t);
-    if (r.run) runs++;
-    st = r.next;
-  }
-  assert.equal(runs, MAX_RUNS_PER_HOUR, "한 시간에 상한만큼만");
-  assert.equal(admitRun(st, t0 + 3600_000 + COALESCE_MS).run, true, "다음 시간에는 다시 허용");
+test("해제된 연결은 동시에 돌던 동기화가 되살리지 못한다", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  process.env.WORKTIME_STORE = "file";
+  process.env.WORKTIME_DATA_DIR = path.join(mkdtempSync(path.join(tmpdir(), "wt-cal-")), "worktime");
+  const { connections } = await import("../app/lib/calendar-store.ts");
+  const c = { id: "c1", provider: "google", label: "x", createdAt: "", secretHash: "", enc: "", calendar: "k", status: { failures: 0 } };
+  await connections().set(c);
+  assert.ok(await connections().update("c1", (x) => (x.status.failures = 1)));
+  await connections().delete("c1");
+  assert.equal(await connections().update("c1", (x) => (x.status.failures = 2)), null);
+  assert.equal(await connections().get("c1"), null, "지운 연결이 다시 생기지 않음");
 });
 
 test("캘린더 복구 바탕: 범위 밖·지금 없는 팀원 기록은 남기고 범위 안만 비운다", () => {

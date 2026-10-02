@@ -89,6 +89,12 @@ async function call(access: string, method: string, url: string, body?: unknown)
   return res;
 }
 
+/** 캘린더가 아직 있는지 (재연결 때 지워진 캘린더를 다시 쓰지 않게) */
+export async function calendarExists(access: string, calId: string): Promise<boolean> {
+  const res = await call(access, "GET", `${API}/calendars/${encodeURIComponent(calId)}`);
+  return res.ok;
+}
+
 export async function createCalendar(access: string): Promise<string> {
   const res = await call(access, "POST", `${API}/calendars`, { summary: CAL_NAME, timeZone: "Asia/Seoul" });
   if (!res.ok) throw new Error(`구글 캘린더 만들기 실패 ${res.status}`);

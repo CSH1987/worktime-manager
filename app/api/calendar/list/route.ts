@@ -1,7 +1,7 @@
 // 캘린더 연결 목록 — 자격증명은 절대 내보내지 않는다
-//   GET /api/calendar → { enabled: { google, apple }, connections: [...] }
-import { connections, hasTokenKey, publicView } from "../../lib/calendar-store";
-import { hasGoogleConfig } from "../../lib/calendar-google";
+//   GET /api/calendar/list → { enabled: { google, apple }, connections: [...] }
+import { connections, hasTokenKey, publicView } from "../../../lib/calendar-store";
+import { hasGoogleConfig } from "../../../lib/calendar-google";
 
 export const dynamic = "force-dynamic";
 
