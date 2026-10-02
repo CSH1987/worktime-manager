@@ -3,6 +3,7 @@
 // 내 캘린더 연결 — 구글/애플 캘린더에 '팀 근태' 캘린더를 만들어 모두의 일정을 받아 본다.
 // 연결한 브라우저는 해제 비밀키를 localStorage 에 보관한다(그 브라우저만 해제 가능).
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface Conn {
   id: string;
@@ -180,7 +181,8 @@ export default function CalendarConnect() {
       >
         캘린더
       </button>
-      {open && (
+      {/* 헤더의 backdrop-blur 가 fixed 위치의 기준을 헤더로 바꾸므로 body 로 띄운다 */}
+      {open && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" onClick={() => !busy && setOpen(false)}>
           <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
             <h2 className="text-base font-bold text-slate-900">내 캘린더에서 팀 일정 보기</h2>
@@ -246,7 +248,8 @@ export default function CalendarConnect() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

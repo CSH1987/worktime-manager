@@ -71,6 +71,13 @@ export async function ownedConnection(request: Request): Promise<Connection | nu
   return a.length === b.length && timingSafeEqual(a, b) ? c : null;
 }
 
+/**
+ * 사용자가 실제로 연 주소의 기준 (구글 리디렉션 주소는 여기에 맞춘다).
+ * Netlify 함수 안의 request.url 은 배포별 내부 주소(<id>--사이트)라 쓰면 안 된다 — 실측 2026-10-02.
+ * 브라우저가 보낸 Host 를 쓰고, 구글에 등록된 주소만 허용되므로 엉뚱한 Host 는 구글이 거절한다.
+ */
 export function publicBase(request: Request): string {
-  return (process.env.WORKTIME_PUBLIC_URL || new URL(request.url).origin).replace(/\/$/, "");
+  if (process.env.WORKTIME_PUBLIC_URL) return process.env.WORKTIME_PUBLIC_URL.replace(/\/$/, "");
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  return host ? `https://${host.split(",")[0].trim()}` : new URL(request.url).origin;
 }

@@ -2,12 +2,12 @@
 // 끝나면 /#cal=<id>.<secret> 로 보내 브라우저가 해제 비밀키를 보관하게 한다.
 import { calendarExists, createCalendar, exchangeCode } from "../../../../lib/calendar-google";
 import { accountHash, maskAccount, verify } from "../../../../lib/calendar-store";
-import { assertCapacity, sameAccount, saveConnection } from "../../../../lib/calendar-http";
+import { assertCapacity, publicBase, sameAccount, saveConnection } from "../../../../lib/calendar-http";
 
 export const dynamic = "force-dynamic";
 
 const back = (request: Request, hash: string) =>
-  Response.redirect(new URL(`/${hash}`, new URL(request.url).origin), 303);
+  Response.redirect(new URL(`/${hash}`, publicBase(request)), 303);
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
