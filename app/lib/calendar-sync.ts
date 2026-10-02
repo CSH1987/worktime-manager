@@ -9,7 +9,7 @@
 //  사용자가 '팀 근태' 캘린더를 지우면 "그만 받겠다" 는 뜻으로 보고 연결을 해제한다(다시 만들지 않음).
 // ============================================================
 import * as apple from "./calendar-apple.ts";
-import { desiredEvents, planSync, seoulToday, type CalendarEvent, type CalendarPayload, type RemoteIndex } from "./calendar-events.ts";
+import { desiredEvents, isMassDelete, planSync, seoulToday, type CalendarEvent, type CalendarPayload, type RemoteIndex } from "./calendar-events.ts";
 import * as google from "./calendar-google.ts";
 import { CalendarGoneError, ReauthError } from "./calendar-google.ts";
 import { connections, decrypt, type AppleCreds, type Connection, type GoogleCreds } from "./calendar-store.ts";
@@ -69,8 +69,11 @@ async function syncOne(c: Connection, want: CalendarEvent[], deadline: number) {
   const target = await targetOf(c);
   const { index } = await target.list();
   const plan = planSync(want, index);
+  // 캘린더는 사이트가 없어져도 남는 이력이다 — 한꺼번에 많이 지워야 하면 앱 쪽 고장으로 보고 삭제를 보류한다.
+  // (일부러 대량 정리할 때만 WORKTIME_ALLOW_MASS_DELETE=1 로 잠깐 풀기)
+  const held = isMassDelete(plan.remove.length, index.size) && process.env.WORKTIME_ALLOW_MASS_DELETE !== "1";
   const jobs: (() => Promise<void>)[] = [
-    ...plan.remove.map((r) => () => target.remove(r.uid, r.ref)),
+    ...(held ? [] : plan.remove.map((r) => () => target.remove(r.uid, r.ref))),
     ...plan.update.map((u) => () => target.put(u.event, u.ref)),
     ...plan.insert.map((e) => () => target.put(e)),
   ];
@@ -91,7 +94,7 @@ async function syncOne(c: Connection, want: CalendarEvent[], deadline: number) {
   }
   // 연결 자체가 죽은 경우(재인증·캘린더 삭제)는 일정 단위 실패가 아니라 연결 실패로 올린다
   if (firstError instanceof ReauthError || firstError instanceof CalendarGoneError) throw firstError;
-  return { sent: sent - failed, failed, remaining: jobs.length - sent, firstError };
+  return { sent: sent - failed, failed, remaining: jobs.length - sent, firstError, heldDeletes: held ? plan.remove.length : 0 };
 }
 
 /**
@@ -138,10 +141,13 @@ export async function syncCalendars(
     const startedAt = Date.now();
     try {
       const r = await syncOne(c, want, deadline);
-      const done = r.remaining === 0 && r.failed === 0;
+      const done = r.remaining === 0 && r.failed === 0 && r.heldDeletes === 0;
       await connections().update(c.id, (x) => {
         x.status.lastCheckedAt = startedAt;
-        if (r.failed > 0) {
+        if (r.heldDeletes > 0) {
+          x.status.failures += 1;
+          x.status.lastError = `일정 ${r.heldDeletes}건 삭제를 보류했습니다(한꺼번에 많이 지워짐 — 앱 데이터 확인 필요). 캘린더 이력은 그대로입니다.`;
+        } else if (r.failed > 0) {
           x.status.failures += 1;
           x.status.lastError = `일정 ${r.failed}건을 보내지 못했습니다 — 다음 동기화 때 다시 시도합니다.`;
         } else {

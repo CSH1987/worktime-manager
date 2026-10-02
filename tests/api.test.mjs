@@ -112,14 +112,14 @@ test("백업 내보내기는 비밀 토큰이 있어야 하고, 복구는 변경
 
 test("캘린더 연결 목록은 자격증명 없이 보이고, 남의 연결은 해제 못 한다", async () => {
   const r = await (await fetch(`${BASE}/api/calendar/list`)).json();
-  assert.deepEqual(r.enabled, { google: false, apple: true }, "구글 키 없으면 구글만 꺼짐");
+  assert.deepEqual(r.enabled, { google: false, apple: false }, "구글 키 없으면 꺼짐, 애플은 기본 끔");
   assert.deepEqual(r.connections, []);
   const d = await fetch(`${BASE}/api/calendar/disconnect`, { method: "POST", body: JSON.stringify({ id: "x", secret: "y" }) });
   assert.equal(d.status, 403);
   const g = await fetch(`${BASE}/api/calendar/google/start`, { method: "POST" });
   assert.equal(g.status, 503);
   const a = await fetch(`${BASE}/api/calendar/apple`, { method: "POST", body: JSON.stringify({ appleId: "a@b.c", appPassword: "short" }) });
-  assert.equal(a.status, 400);
+  assert.equal(a.status, 404, "애플 직접 연결은 기본으로 꺼져 있음");
   const ad = await fetch(`${BASE}/api/calendar/disconnect`, { method: "POST", headers: admin, body: JSON.stringify({ id: "none" }) });
   assert.equal(ad.status, 404, "관리자 해제는 토큰으로 되고, 없는 연결은 404");
 });

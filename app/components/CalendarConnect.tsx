@@ -99,7 +99,7 @@ export default function CalendarConnect() {
     const t = setTimeout(() => {
       setOwned(readOwned());
       if (!h.startsWith("#cal")) return;
-      history.replaceState(null, "", window.location.pathname + window.location.search);
+      history.replaceState(null, "", window.location.pathname);
       openModal();
       const ok = /^#cal=([^.]+)\.(.+)$/.exec(h);
       if (ok) {
@@ -188,17 +188,22 @@ export default function CalendarConnect() {
             <h2 className="text-base font-bold text-slate-900">내 캘린더에서 팀 일정 보기</h2>
             <p className="mt-1 text-sm text-slate-500">
               연결하면 내 계정에 &lsquo;팀 근태&rsquo; 캘린더가 생기고, 앱 달력의 부재·잔업·패밀리데이가 자동으로 들어갑니다.
-              캘린더에도 원본이 같이 저장돼 백업 역할을 합니다.
+              사이트에 문제가 생겨도 이 캘린더의 일정(이력)은 내 계정에 그대로 남습니다.
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
               <button disabled={busy || !enabled.google} onClick={connectGoogle} className={`${btn} bg-[#1428A0] text-white disabled:opacity-40`}>
                 구글 캘린더 연결
               </button>
-              <button disabled={busy || !enabled.apple} onClick={() => setAppleForm((v) => !v)} className={`${btn} bg-slate-900 text-white disabled:opacity-40`}>
-                애플 캘린더 연결
-              </button>
+              {enabled.apple && (
+                <button disabled={busy} onClick={() => setAppleForm((v) => !v)} className={`${btn} bg-slate-900 text-white disabled:opacity-40`}>
+                  애플 캘린더 연결
+                </button>
+              )}
             </div>
+            <p className="mt-2 text-xs text-slate-500">
+              구글 동의 화면에서 <b>캘린더 권한 체크박스</b>를 꼭 체크하세요. 아이폰은 설정 → 캘린더 → 계정 → 계정 추가 → Google 로 같은 구글 계정을 넣으면 아이폰 캘린더에도 보입니다.
+            </p>
             {!enabled.google && !enabled.apple && (
               <p className="mt-2 text-xs text-slate-400">관리자 설정이 끝나면 연결할 수 있습니다.</p>
             )}

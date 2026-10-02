@@ -34,14 +34,14 @@ const base = () => ({
 
 const TODAY = "2026-10-02";
 
-test("앱 달력에 보이는 것만 일정으로 만든다 (범위 밖 제외)", () => {
+test("앱 달력에 보이는 것을 일정으로 만들고, 오래된 기록도 이력으로 남긴다", () => {
   const ev = desiredEvents(base(), TODAY);
   const titles = ev.map((e) => e.title);
   assert.ok(titles.includes("가 · 연차"));
   assert.ok(titles.includes("잔업: 나 (추첨)"));
   assert.ok(titles.includes("잔업 가능 2명: 가, 나"), "팀원 순서대로 묶는다");
   assert.ok(titles.includes("패밀리데이"));
-  assert.ok(!ev.some((e) => e.payload.kind === "absence" && e.payload.absence.id === "old"), "180일보다 오래된 건 제외");
+  assert.ok(ev.some((e) => e.payload.kind === "absence" && e.payload.absence.id === "old"), "2020년 기록도 캘린더에 남긴다(사이트가 없어져도 이력 유지)");
   const abs = ev.find((e) => e.title === "가 · 연차");
   assert.equal(abs.start, "2026-10-05");
   assert.equal(abs.endExclusive, "2026-10-08", "종일 일정 끝은 마지막 날 + 1");
@@ -91,8 +91,8 @@ test("캘린더 원본만으로 복구 → 부재·잔업이 원래대로", () =
   const src = base();
   const payloads = desiredEvents(src, TODAY).map((e) => e.payload);
   const back = dataFromPayloads(payloads);
-  const inWindow = src.absences.filter((a) => a.id !== "old");
-  assert.deepEqual(back.absences, inWindow);
+  const byId = (xs) => [...xs].sort((x, y) => x.id.localeCompare(y.id));
+  assert.deepEqual(byId(back.absences), byId(src.absences), "오래된 기록까지 캘린더만으로 전부 되살아난다");
   assert.deepEqual(back.assignments, src.assignments);
   assert.deepEqual(back.availability.map((v) => v.id).sort(), ["v1", "v2"]);
   assert.deepEqual(back.members.map((m) => m.name).sort(), ["가", "나"]);
@@ -118,7 +118,7 @@ test("자격증명 암호화·서명·계정 가리기", () => {
 });
 
 import { chunkText } from "../app/lib/calendar-google.ts";
-import { restoreBase } from "../app/lib/calendar-events.ts";
+import { isMassDelete, restoreBase } from "../app/lib/calendar-events.ts";
 
 test("구글 조각 나누기는 이모지를 둘로 가르지 않는다", () => {
   const s = "가".repeat(999) + "😀" + "끝";
@@ -154,12 +154,26 @@ test("해제된 연결은 동시에 돌던 동기화가 되살리지 못한다",
   assert.equal(await connections().get("c1"), null, "지운 연결이 다시 생기지 않음");
 });
 
-test("캘린더 복구 바탕: 범위 밖·지금 없는 팀원 기록은 남기고 범위 안만 비운다", () => {
+test("캘린더 복구 바탕: 지금 없는 팀원 기록은 남기고 나머지는 캘린더 것으로", () => {
   const d = base();
   d.absences.push({ id: "ghost", memberId: "zz", startDate: "2026-10-05", endDate: "2026-10-05", type: "etc", label: "", memo: "" });
   const b = restoreBase(d, TODAY);
-  assert.deepEqual(b.absences.map((a) => a.id).sort(), ["ghost", "old"]);
+  assert.deepEqual(b.absences.map((a) => a.id).sort(), ["ghost"]);
   assert.equal(b.assignments.length, 0);
   const back = dataFromPayloads(desiredEvents(d, TODAY).map((e) => e.payload), b);
   assert.deepEqual(back.absences.map((a) => a.id).sort(), ["ab1", "ghost", "old"], "복구 뒤 아무것도 잃지 않음");
+});
+
+test("대량 삭제 막기: 앱 데이터가 크게 줄면 캘린더 이력을 지우지 않는다", () => {
+  assert.equal(isMassDelete(3, 100), false, "평소 몇 건 삭제는 그대로");
+  assert.equal(isMassDelete(10, 20), false, "10건 이하는 그대로");
+  assert.equal(isMassDelete(15, 200), false, "전체의 20% 이하면 그대로");
+  assert.equal(isMassDelete(121, 125), true, "앱 데이터가 통째로 사라진 경우는 보류");
+  // 앱 데이터가 비었을 때 계획: 전부 삭제 → 보류 대상
+  const want = desiredEvents(base(), TODAY);
+  const have = new Map(want.map((e) => [e.uid, { hash: e.hash, ref: e.uid }]));
+  for (let i = 0; i < 30; i++) have.set(`tmx${i}`, { hash: "h", ref: "r" });
+  const empty = { ...base(), absences: [], availability: [], assignments: [] };
+  const p = planSync(desiredEvents(empty, TODAY), have);
+  assert.equal(isMassDelete(p.remove.length, have.size), true);
 });

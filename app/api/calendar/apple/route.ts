@@ -1,12 +1,13 @@
 // 애플 연결 — Apple ID + 앱 전용 암호로 로그인 확인 후 '팀 근태' 캘린더를 만든다
 //   POST /api/calendar/apple { appleId, appPassword } → { id, secret }
 import { appleCalendarExists, connectApple, verifyAppleLogin } from "../../../lib/calendar-apple";
-import { accountHash, hasTokenKey, maskAccount } from "../../../lib/calendar-store";
+import { accountHash, appleEnabled, hasTokenKey, maskAccount } from "../../../lib/calendar-store";
 import { assertCapacity, json, sameAccount, saveConnection } from "../../../lib/calendar-http";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  if (!appleEnabled()) return json({ error: "애플 직접 연결은 쓰지 않습니다. 아이폰 캘린더에 구글 계정을 추가해 주세요." }, 404);
   if (!hasTokenKey()) return json({ error: "캘린더 연결이 아직 설정되지 않았습니다." }, 503);
   const body = (await request.json().catch(() => null)) as { appleId?: unknown; appPassword?: unknown } | null;
   const appleId = typeof body?.appleId === "string" ? body.appleId.trim() : "";

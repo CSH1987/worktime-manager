@@ -4,6 +4,8 @@
 //    부재 · 잔업 확정 · 잔업 가능 후보(날짜별 1건) · 패밀리데이
 //  공휴일은 각 캘린더에 이미 있으므로 넣지 않는다.
 //  일정마다 원본 기록(payload)을 함께 실어 캘린더만 남아도 복구할 수 있게 한다.
+//  핵심 원칙(사용자 지시 2026-10-02): 사이트가 없어지거나 고장 나도 연결한 사람의 캘린더에 이력이
+//  남아야 한다 → 기록은 날짜와 상관없이 전부 올리고(오래됐다고 지우지 않음), 대량 삭제는 동기화가 막는다.
 // ============================================================
 import { createHash } from "node:crypto";
 import { absenceDisplayLabel, addDaysKey, familyDayKey } from "./data.ts";
@@ -14,11 +16,11 @@ import type {
   OvertimeAvailability,
 } from "./types";
 
-/** 캘린더에 올리는 범위 — 지난 180일 ~ 앞으로 400일 (전체 백업은 /api/export 가 따로 맡는다) */
+/** 패밀리데이를 만드는 범위 — 지난 180일 ~ 앞으로 400일 (기록은 날짜 제한 없이 전부 올린다) */
 export const PAST_DAYS = 180;
 export const FUTURE_DAYS = 400;
 
-/** 캘린더에 올리는 날짜 범위 */
+/** 패밀리데이 범위 */
 export function windowOf(today: string) {
   return { from: addDaysKey(today, -PAST_DAYS), to: addDaysKey(today, FUTURE_DAYS) };
 }
@@ -28,15 +30,15 @@ export function windowOf(today: string) {
  * (범위 밖·지금 팀원 목록에 없는 팀원)은 그대로 두고, 캘린더가 대신할 기록만 비운다.
  */
 export function restoreBase(current: AppData, today: string): AppData {
-  const { from, to } = windowOf(today);
+  void today;
+  // 캘린더에는 지금 팀원의 기록이 날짜 제한 없이 전부 있으므로, 지금 팀원 목록에 없는 팀원 기록만 남긴다
   const members = new Set(current.members.map((m) => m.id));
-  const onCalendar = (memberId: string, start: string, end: string) =>
-    members.has(memberId) && end >= from && start <= to;
+  const onCalendar = (memberId: string) => members.has(memberId);
   return {
     ...current,
-    absences: current.absences.filter((a) => !onCalendar(a.memberId, a.startDate, a.endDate)),
-    availability: current.availability.filter((v) => !onCalendar(v.memberId, v.date, v.date)),
-    assignments: current.assignments.filter((s) => !onCalendar(s.memberId, s.date, s.date)),
+    absences: current.absences.filter((a) => !onCalendar(a.memberId)),
+    availability: current.availability.filter((v) => !onCalendar(v.memberId)),
+    assignments: current.assignments.filter((s) => !onCalendar(s.memberId)),
   };
 }
 
@@ -82,7 +84,7 @@ function make(
 
 /**
  * today: 기준일 YYYY-MM-DD (서버는 한국 날짜를 넘긴다).
- * 범위와 겹치는 일정만 만든다.
+ * 기록은 날짜와 상관없이 전부, 패밀리데이만 windowOf 범위 안에서 만든다.
  */
 export function desiredEvents(d: AppData, today: string): CalendarEvent[] {
   const { from, to } = windowOf(today);
@@ -91,7 +93,7 @@ export function desiredEvents(d: AppData, today: string): CalendarEvent[] {
   const out: CalendarEvent[] = [];
 
   for (const a of d.absences) {
-    if (a.endDate < from || a.startDate > to || !nameOf.has(a.memberId)) continue;
+    if (!nameOf.has(a.memberId)) continue;
     const name = memberName(a.memberId);
     const label = absenceDisplayLabel(a);
     out.push(
@@ -101,7 +103,7 @@ export function desiredEvents(d: AppData, today: string): CalendarEvent[] {
   }
 
   for (const s of d.assignments) {
-    if (s.date < from || s.date > to || !nameOf.has(s.memberId)) continue;
+    if (!nameOf.has(s.memberId)) continue;
     const name = memberName(s.memberId);
     out.push(
       make(`asg:${s.id}`, `잔업: ${name} (${METHOD_LABEL[s.method]})`, s.date, s.date, "",
@@ -111,7 +113,7 @@ export function desiredEvents(d: AppData, today: string): CalendarEvent[] {
 
   const byDate = new Map<string, OvertimeAvailability[]>();
   for (const v of d.availability) {
-    if (v.date < from || v.date > to || !nameOf.has(v.memberId)) continue;
+    if (!nameOf.has(v.memberId)) continue;
     const list = byDate.get(v.date) ?? [];
     list.push(v);
     byDate.set(v.date, list);
@@ -149,6 +151,16 @@ export interface SyncPlan {
 }
 
 /** 원하는 목록과 캘린더 현재 상태를 비교해 보낼 것만 고른다 */
+/**
+ * 대량 삭제 막기 — 앱 데이터가 고장·실수로 크게 줄었을 때 연결된 캘린더(=백업)까지 지우지 않게.
+ * 한 번에 지울 일정이 이 기준을 넘으면 삭제만 보류하고 추가·수정은 그대로 보낸다.
+ */
+export const MASS_DELETE_MIN = 10;
+export const MASS_DELETE_RATIO = 0.2;
+export function isMassDelete(removeCount: number, haveCount: number): boolean {
+  return removeCount > MASS_DELETE_MIN && removeCount > haveCount * MASS_DELETE_RATIO;
+}
+
 export function planSync(want: CalendarEvent[], have: RemoteIndex): SyncPlan {
   const plan: SyncPlan = { insert: [], update: [], remove: [] };
   const wanted = new Set<string>();

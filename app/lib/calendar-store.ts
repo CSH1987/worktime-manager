@@ -51,6 +51,13 @@ function keyBytes(): Buffer {
 
 export const hasTokenKey = () => (process.env.WORKTIME_TOKEN_KEY ?? "").length >= 32;
 
+/**
+ * 애플(iCloud) 직접 연결은 기본으로 끈다(사용자 결정 2026-10-02: 구글만 사용).
+ * 아이폰 사용자는 아이폰 캘린더 앱에 구글 계정을 추가해 같은 '팀 근태' 캘린더를 본다.
+ * 다시 켜려면 Netlify 환경변수 WORKTIME_ENABLE_APPLE=1.
+ */
+export const appleEnabled = () => process.env.WORKTIME_ENABLE_APPLE === "1";
+
 export function encrypt(value: unknown): string {
   const iv = randomBytes(12);
   const c = createCipheriv("aes-256-gcm", keyBytes(), iv);
